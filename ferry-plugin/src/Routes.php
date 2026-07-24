@@ -128,8 +128,13 @@ final class Routes
             }
             $relpath = (string) $relpath;
             $abs = realpath($root . '/' . $relpath);
-            if ($abs === false || strpos($abs, $root . DIRECTORY_SEPARATOR) !== 0
-                || Excludes::excluded($relpath) || !is_file($abs)) {
+            if ($abs === false || strpos($abs, $root . DIRECTORY_SEPARATOR) !== 0) {
+                $skipped[] = $relpath;
+                $done++;
+                continue;
+            }
+            $resolved_rel = str_replace(DIRECTORY_SEPARATOR, '/', substr($abs, strlen($root) + 1));
+            if (Excludes::excluded($resolved_rel) || !is_file($abs)) {
                 $skipped[] = $relpath;
                 $done++;
                 continue;
@@ -140,6 +145,9 @@ final class Routes
                 $done++;
                 continue;
             }
+            // If the file shrinks between fopen and read, add_stream throws mid-entry and the tar
+            // (including its meta trailer) is truncated — the CLI fails loudly on the missing trailer
+            // and the pull retries; accepted for v0.
             $tar->add_stream($relpath, $fh, (int) filesize($abs), (int) filemtime($abs));
             fclose($fh);
             $done++;
@@ -157,10 +165,16 @@ final class Routes
     /** §3.4: byte-range mode for single files larger than a batch. Raw bytes, no tar. */
     private static function send_range(string $relpath, int $offset, int $length): void
     {
+        $offset = max(0, $offset);
+        $length = max(0, $length);
         $root = realpath(untrailingslashit(ABSPATH));
         $abs = realpath($root . '/' . $relpath);
-        if ($abs === false || strpos($abs, $root . DIRECTORY_SEPARATOR) !== 0
-            || Excludes::excluded($relpath) || !is_file($abs)) {
+        if ($abs === false || strpos($abs, $root . DIRECTORY_SEPARATOR) !== 0) {
+            status_header(404);
+            exit;
+        }
+        $resolved_rel = str_replace(DIRECTORY_SEPARATOR, '/', substr($abs, strlen($root) + 1));
+        if (Excludes::excluded($resolved_rel) || !is_file($abs)) {
             status_header(404);
             exit;
         }

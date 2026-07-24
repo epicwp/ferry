@@ -13,11 +13,12 @@ define('WP_DEBUG', false);
 define("WP_MEMORY_LIMIT", '256M');
 define('DYNAMIC_ONE', getenv('SOME_VAR'));
 if (!defined('WP_CACHE')) define('WP_CACHE', true);
+define ( 'SPACED_OUT', 1 );
 $noise = 'define'; // string literal, not a call
 // define('COMMENTED_OUT', 1); -- tokenizer sees a comment, not a call
 PHP;
         $this->assertSame(
-            ['DB_NAME', 'WP_DEBUG', 'WP_MEMORY_LIMIT', 'DYNAMIC_ONE', 'WP_CACHE'],
+            ['DB_NAME', 'WP_DEBUG', 'WP_MEMORY_LIMIT', 'DYNAMIC_ONE', 'WP_CACHE', 'SPACED_OUT'],
             Config::names_from_source($src)
         );
     }

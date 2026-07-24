@@ -26,12 +26,21 @@ final class Config
             if (!is_array($t) || $t[0] !== T_STRING || strtolower($t[1]) !== 'define') {
                 continue;
             }
-            for ($j = $i + 1; $j < min($i + 4, $count); $j++) {
+            for ($j = $i + 1; $j < $count; $j++) {
                 $n = $tokens[$j];
-                if (is_array($n) && $n[0] === T_CONSTANT_ENCAPSED_STRING) {
-                    $names[] = trim($n[1], "\"'");
+                if (is_array($n)) {
+                    if ($n[0] === T_WHITESPACE || $n[0] === T_COMMENT || $n[0] === T_DOC_COMMENT) {
+                        continue;
+                    }
+                    if ($n[0] === T_CONSTANT_ENCAPSED_STRING) {
+                        $names[] = trim($n[1], "\"'");
+                    }
                     break;
                 }
+                if ($n === '(') {
+                    continue;
+                }
+                break;
             }
         }
         return array_values(array_unique($names));
