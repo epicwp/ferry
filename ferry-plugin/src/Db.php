@@ -114,6 +114,11 @@ final class Db
             $args = $before !== null ? [$after, $before, $chunk_rows] : [$after, $chunk_rows];
             return $wpdb->get_results($wpdb->prepare($sql, ...$args), ARRAY_A);
         }
+        // No usable pk: OFFSET fallback (§3.5). Without a key there is nothing
+        // stable to ORDER BY; row order across chunks is best-effort and can
+        // skip/duplicate under concurrent writes. Accepted for v0: these are
+        // rare, small plugin tables, and the export's consistency posture is
+        // already best-effort (base doc §3.5).
         return $wpdb->get_results($wpdb->prepare("SELECT * FROM `$table` LIMIT %d OFFSET %d", $chunk_rows, $after), ARRAY_A);
     }
 }
