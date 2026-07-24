@@ -46,9 +46,11 @@ final class DbLiteralTest extends TestCase
             ['Field' => 'price', 'Type' => 'decimal(10,2)'],
             ['Field' => 'ratio', 'Type' => 'double'],
             ['Field' => 'blob_data', 'Type' => 'varbinary(255)'],
+            ['Field' => 'geo', 'Type' => 'point'],
+            ['Field' => 'geo_multi', 'Type' => 'multipoint'],
         ];
         $this->assertSame(
-            ['ID' => true, 'post_content' => false, 'price' => true, 'ratio' => true, 'blob_data' => false],
+            ['ID' => true, 'post_content' => false, 'price' => true, 'ratio' => true, 'blob_data' => false, 'geo' => false, 'geo_multi' => false],
             Db::numeric_map($rows)
         );
     }

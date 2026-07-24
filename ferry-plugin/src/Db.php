@@ -15,7 +15,7 @@ final class Db
     {
         $map = [];
         foreach ($show_columns_rows as $col) {
-            $map[$col['Field']] = (bool) preg_match('/int|decimal|float|double/i', $col['Type']);
+            $map[$col['Field']] = (bool) preg_match('/^(tinyint|smallint|mediumint|int|integer|bigint|decimal|numeric|float|double|real)\b/i', $col['Type']);
         }
         return $map;
     }
