@@ -8,6 +8,7 @@ namespace Ferry;
 final class Excludes
 {
     const PREFIXES = [
+        '.ddev/',                         // §5: local dev tooling - never travels (a ferry clone or a DDEV-based prod host has one)
         'wp-content/uploads/',            // §2.8: media falls back to production
         'wp-content/cache/',              // also covers cache/wp-rocket/
         'wp-content/updraft/',

@@ -36,6 +36,8 @@ final class ExcludesTest extends TestCase
             ['error_log'],
             ['wp-admin/error_log'],                        // error_log appears in many directories
             ['wp-content/mu-plugins/ferry-overlay.php'],
+            ['.ddev/config.yaml'],                         // §5: local dev tooling never travels
+            ['.ddev/nginx/ferry-uploads.conf'],
         ];
     }
 

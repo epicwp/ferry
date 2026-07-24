@@ -80,10 +80,11 @@ describe('generateMuPlugin', () => {
 });
 
 describe('generateNginxFallback', () => {
-  it('302s missing uploads to production', () => {
+  it('302s missing uploads to production via a preferential prefix location', () => {
     const conf = generateNginxFallback('https://wasgeurtje.nl');
-    expect(conf).toContain('location ~ ^/wp-content/uploads/');
-    expect(conf).toContain('return 302 https://wasgeurtje.nl/wp-content/uploads/$ferrypath;');
+    // ^~ must win over DDEV's regex media handler; $request_uri carries the full path.
+    expect(conf).toContain('location ^~ /wp-content/uploads/');
+    expect(conf).toContain('return 302 https://wasgeurtje.nl$request_uri;');
   });
 });
 

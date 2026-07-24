@@ -89,13 +89,18 @@ add_filter('pre_http_request', function ($pre, $args, $url) {
 `;
 }
 
-/** §2.8: solve uploads on the HTTP level - local if present, 302 to production if not. */
+/**
+ * §2.8: solve uploads on the HTTP level - local if present, 302 to production if not.
+ * `^~` makes this a preferential prefix match: when it matches, nginx skips regex
+ * locations entirely. Without it, DDEV's `location ~* \.(png|jpg|...)$` static-media
+ * handler matches an uploaded image first and 404s it before this fallback runs.
+ */
 export function generateNginxFallback(prodOrigin: string): string {
-  return `location ~ ^/wp-content/uploads/(?<ferrypath>.*)$ {
+  return `location ^~ /wp-content/uploads/ {
     try_files $uri @ferry_origin;
 }
 location @ferry_origin {
-    return 302 ${prodOrigin}/wp-content/uploads/$ferrypath;
+    return 302 ${prodOrigin}$request_uri;
 }
 `;
 }
