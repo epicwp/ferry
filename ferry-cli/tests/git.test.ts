@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, promises as fsp, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ensureRepo, neutralizeNestedGit } from '../src/git.js';
+import { ensureRepo, neutralizeNestedGit, writeGitignore, writeClaudeMd } from '../src/git.js';
 
 const git = (dir: string, ...args: string[]) =>
   execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
@@ -63,5 +63,42 @@ describe('neutralizeNestedGit', () => {
     expect(existsSync(join(dir, 'p/.git.ferry-disabled/NEW'))).toBe(true);
     expect(existsSync(join(dir, 'p/.git.ferry-disabled/OLD'))).toBe(false);
     expect(existsSync(join(dir, 'p/.git'))).toBe(false);
+  });
+});
+
+describe('writeGitignore / writeClaudeMd', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'ferry-git-'));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('writes a self-ignoring .gitignore that hides ferry artifacts but not real code', async () => {
+    await ensureRepo(dir);
+    await writeGitignore(dir);
+    const ignored = (p: string) => {
+      try {
+        execFileSync('git', ['check-ignore', p], { cwd: dir });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    expect(ignored('wp-config.php')).toBe(true);
+    expect(ignored('wp-config-ddev.php')).toBe(true);
+    expect(ignored('.ddev/config.yaml')).toBe(true);
+    expect(ignored('wp-content/uploads/2026/x.jpg')).toBe(true);
+    expect(ignored('wp-content/mu-plugins/ferry-overlay.php')).toBe(true);
+    expect(ignored('.gitignore')).toBe(true);
+    expect(ignored('CLAUDE.md')).toBe(true);
+    expect(ignored('wp-content/plugins/foo/plugin.php')).toBe(false);
+  });
+
+  it('writes CLAUDE.md ground rules', async () => {
+    await writeClaudeMd(dir);
+    const md = await fsp.readFile(join(dir, 'CLAUDE.md'), 'utf8');
+    expect(md).toContain('git diff production');
+    expect(md).toContain('ferry-overlay.php');
+    expect(md).toContain('snapshot');
   });
 });

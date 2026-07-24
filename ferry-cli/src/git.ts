@@ -78,3 +78,39 @@ async function walk(root: string, current: string, out: string[]): Promise<void>
     await walk(root, abs, out);
   }
 }
+
+const GITIGNORE = `/.gitignore
+/CLAUDE.md
+/wp-config.php
+/wp-config-ddev.php
+/.ddev/
+/wp-content/uploads/
+/wp-content/mu-plugins/ferry-overlay.php
+`;
+
+export async function writeGitignore(dir: string): Promise<void> {
+  await fsp.writeFile(join(dir, '.gitignore'), GITIGNORE);
+}
+
+const CLAUDE_MD = `# Ferry clone - ground rules
+
+This is a **ferry clone** of a production WordPress site, for debugging. Work here as you
+would in Claude Code: grep, read, edit, and run \`wp-cli\`, \`git\`, and shell commands.
+
+- **The database is a point-in-time snapshot.** Production owns the live data - do not assume
+  orders, users, or options here are current.
+- **The clone is airtight.** Outbound email and HTTP are blocked, and missing uploads/media
+  are redirected (302) to production. This is expected, not a bug.
+- **Changes go back through git.** Make code changes on your work branch; \`git diff production\`
+  is exactly what would be pushed to production.
+- **Never edit these local artifacts** - they are ferry/DDEV-generated, git-ignored, and never
+  travel to production: \`wp-config.php\`, anything under \`.ddev/\`, and
+  \`wp-content/mu-plugins/ferry-overlay.php\`.
+- **Drop-ins are disabled on purpose.** Files like \`object-cache.php\` are renamed to
+  \`*.php.ferry-disabled\` so the clone does not fatal on services (Redis, etc.) that are not
+  running locally.
+`;
+
+export async function writeClaudeMd(dir: string): Promise<void> {
+  await fsp.writeFile(join(dir, 'CLAUDE.md'), CLAUDE_MD);
+}
