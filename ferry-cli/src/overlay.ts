@@ -5,12 +5,14 @@ import { join } from 'node:path';
 import type { SiteInfo } from './profile.js';
 
 // Constants that must not carry over: DB credentials are DDEV's, cache/cron
-// are forced off by the harness, and path/URL constants point into production.
+// are forced off by the harness, path/URL constants point into production, and
+// cookie/session constants are scoped to production's domain/siteurl.
 const SKIP_CONSTANTS = new Set([
   'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DB_HOST', 'DB_CHARSET', 'DB_COLLATE',
   'WP_CACHE', 'DISABLE_WP_CRON', 'ABSPATH', 'FERRY_LOCAL_URL',
   'WP_HOME', 'WP_SITEURL', 'WP_CONTENT_DIR', 'WP_CONTENT_URL',
   'WP_PLUGIN_DIR', 'WP_PLUGIN_URL', 'WPMU_PLUGIN_DIR', 'WP_TEMP_DIR',
+  'COOKIE_DOMAIN', 'COOKIEHASH',
 ]);
 
 const SALT_KEYS = [

@@ -20,6 +20,7 @@ const info = (over: Partial<SiteInfo> = {}): SiteInfo => ({
     WP_CONTENT_DIR: '/home/u/public_html/wp-content',  // path constant: must not carry
     SOME_PLUGIN_PATH: '/home/u/private/keys',           // absolute path value: must not carry
     WP_CACHE: true,                                     // forced false locally
+    COOKIE_DOMAIN: '.wasgeurtje.nl',                    // production domain: must not carry
   },
   multisite: false,
   prefix: 'wpx_',
@@ -53,6 +54,7 @@ describe('generateWpConfig', () => {
     expect(config).toContain("define('WP_MEMORY_LIMIT', '256M');");
     expect(config).not.toContain('WP_CONTENT_DIR');
     expect(config).not.toContain('SOME_PLUGIN_PATH');
+    expect(config).not.toContain('COOKIE_DOMAIN');
     expect(config).toContain("define('WP_CACHE', false);");
     expect(config).toContain("define('DISABLE_WP_CRON', true);");
     expect(config).toContain("define('FERRY_LOCAL_URL', 'https://wasgeurtje-nl.ddev.site');");
