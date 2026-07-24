@@ -20,7 +20,7 @@ const SALT_KEYS = [
   'AUTH_SALT', 'SECURE_AUTH_SALT', 'LOGGED_IN_SALT', 'NONCE_SALT',
 ];
 
-const DROP_INS = ['object-cache.php', 'advanced-cache.php', 'db.php', 'sunrise.php'];
+export const DROP_INS = ['object-cache.php', 'advanced-cache.php', 'db.php', 'sunrise.php'];
 
 export function phpScalar(v: unknown): string | null {
   if (v === null) return 'null';

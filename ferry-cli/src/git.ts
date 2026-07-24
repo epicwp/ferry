@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, promises as fsp } from 'node:fs';
 import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
+import { DROP_INS } from './overlay.js';
 
 const run = promisify(execFile);
 
@@ -113,4 +114,32 @@ would in Claude Code: grep, read, edit, and run \`wp-cli\`, \`git\`, and shell c
 
 export async function writeClaudeMd(dir: string): Promise<void> {
   await fsp.writeFile(join(dir, 'CLAUDE.md'), CLAUDE_MD);
+}
+
+/** Map a manifest path to the set of on-disk paths it may occupy after local transforms:
+ *  a bundled `.git/` becomes `.git.ferry-disabled/`, and a wp-content drop-in may be renamed
+ *  to `*.php.ferry-disabled`. Both variants are kept so reconciliation never deletes them. */
+function keepVariants(path: string): string[] {
+  const remapped = path.replace(/(^|\/)\.git\//g, `$1${DISABLED}/`);
+  if (DROP_INS.some((d) => remapped === `wp-content/${d}`)) {
+    return [remapped, `${remapped}.ferry-disabled`];
+  }
+  return [remapped];
+}
+
+/** Reconcile the working tree against the pull's manifest, then commit on `production`. */
+export async function commitProduction(dir: string, manifestPaths: string[], message: string): Promise<string> {
+  if (manifestPaths.length === 0) {
+    throw new Error('refusing to commit an empty manifest - this would delete the whole tree');
+  }
+  const keep = new Set(manifestPaths.flatMap(keepVariants));
+  const tracked = (await runGit(dir, ['ls-files'])).split('\n').filter(Boolean);
+  for (const path of tracked) {
+    if (!keep.has(path)) {
+      await fsp.rm(join(dir, path), { force: true }); // upstream deletion
+    }
+  }
+  await runGit(dir, ['add', '-A']);
+  await runGit(dir, ['commit', '-q', '--allow-empty', '-m', message]);
+  return runGit(dir, ['rev-parse', 'HEAD']);
 }

@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, promises as fsp, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ensureRepo, neutralizeNestedGit, writeGitignore, writeClaudeMd } from '../src/git.js';
+import { ensureRepo, neutralizeNestedGit, writeGitignore, writeClaudeMd, commitProduction } from '../src/git.js';
 
 const git = (dir: string, ...args: string[]) =>
   execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
@@ -100,5 +100,64 @@ describe('writeGitignore / writeClaudeMd', () => {
     expect(md).toContain('git diff production');
     expect(md).toContain('ferry-overlay.php');
     expect(md).toContain('snapshot');
+  });
+});
+
+describe('commitProduction', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'ferry-git-'));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('captures adds, modifications, and deletions across pulls', async () => {
+    await ensureRepo(dir);
+    await fsp.writeFile(join(dir, 'a.php'), 'A1');
+    await fsp.mkdir(join(dir, 'wp-content'), { recursive: true });
+    await fsp.writeFile(join(dir, 'wp-content/b.php'), 'B1');
+    const sha1 = await commitProduction(dir, ['a.php', 'wp-content/b.php'], 'snap 1');
+    expect(sha1).toMatch(/^[0-9a-f]{40}$/);
+    expect(git(dir, 'ls-files').split('\n').sort()).toEqual(['a.php', 'wp-content/b.php']);
+
+    await fsp.writeFile(join(dir, 'a.php'), 'A2'); // modified
+    await fsp.writeFile(join(dir, 'c.php'), 'C1'); // added; b.php deleted upstream (not in manifest)
+    const sha2 = await commitProduction(dir, ['a.php', 'c.php'], 'snap 2');
+    expect(sha2).not.toBe(sha1);
+    expect(git(dir, 'ls-files').split('\n').sort()).toEqual(['a.php', 'c.php']);
+    expect(existsSync(join(dir, 'wp-content/b.php'))).toBe(false);
+    expect(git(dir, 'show', 'HEAD:a.php')).toBe('A2');
+  });
+
+  it('refuses an empty manifest', async () => {
+    await ensureRepo(dir);
+    await expect(commitProduction(dir, [], 'x')).rejects.toThrow(/empty manifest/);
+  });
+
+  it('commits an empty (no-change) re-pull', async () => {
+    await ensureRepo(dir);
+    await fsp.writeFile(join(dir, 'a.php'), 'A');
+    await commitProduction(dir, ['a.php'], 'snap 1');
+    await commitProduction(dir, ['a.php'], 'snap 2 no change');
+    expect(git(dir, 'rev-list', '--count', 'HEAD')).toBe('2');
+  });
+
+  it('keeps a renamed drop-in whose manifest still lists the original name', async () => {
+    await ensureRepo(dir);
+    await fsp.mkdir(join(dir, 'wp-content'), { recursive: true });
+    await fsp.writeFile(join(dir, 'index.php'), '<?php');
+    await fsp.writeFile(join(dir, 'wp-content/object-cache.php.ferry-disabled'), '<?php');
+    await commitProduction(dir, ['index.php', 'wp-content/object-cache.php'], 'snap 1');
+    await commitProduction(dir, ['index.php', 'wp-content/object-cache.php'], 'snap 2');
+    expect(existsSync(join(dir, 'wp-content/object-cache.php.ferry-disabled'))).toBe(true);
+    expect(git(dir, 'ls-files').split('\n')).toContain('wp-content/object-cache.php.ferry-disabled');
+  });
+
+  it('keeps neutralized nested-repo files whose manifest lists .git paths', async () => {
+    await ensureRepo(dir);
+    await fsp.mkdir(join(dir, 'p/.git.ferry-disabled'), { recursive: true });
+    await fsp.writeFile(join(dir, 'p/.git.ferry-disabled/HEAD'), 'ref');
+    await commitProduction(dir, ['p/.git/HEAD'], 'snap 1');
+    await commitProduction(dir, ['p/.git/HEAD'], 'snap 2');
+    expect(existsSync(join(dir, 'p/.git.ferry-disabled/HEAD'))).toBe(true);
   });
 });
