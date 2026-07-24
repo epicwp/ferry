@@ -3,8 +3,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FerryClient } from '../src/client.js';
-import { fetchAll } from '../src/transfer.js';
+import { fetchAll, isMetaEntry } from '../src/transfer.js';
 import { startMockPlugin, sizeOf, type MockPlugin } from './helpers/mockPlugin.js';
+
+describe('isMetaEntry', () => {
+  it('matches bare and dot-slash-prefixed meta entries only', () => {
+    expect(isMetaEntry('.ferry-meta.json')).toBe(true);
+    expect(isMetaEntry('./.ferry-meta.json')).toBe(true);
+    expect(isMetaEntry('wp-content/.ferry-meta.json')).toBe(false);
+    expect(isMetaEntry('index.php')).toBe(false);
+  });
+});
 
 describe('fetchAll', () => {
   let fixture: string;

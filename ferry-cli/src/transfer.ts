@@ -40,6 +40,11 @@ export function binPack(
 export const META_ENTRY = '.ferry-meta.json';
 const RANGE_CHUNK = 4 * 1024 * 1024;
 
+/** Tar writers may prefix entry names with './' - normalize before comparing. */
+export function isMetaEntry(path: string): boolean {
+  return path.replace(/^\.\//, '') === META_ENTRY;
+}
+
 export interface BatchMeta {
   complete: boolean;
   next_index: number;
@@ -51,7 +56,7 @@ export async function extractBatch(buffer: Buffer, destDir: string): Promise<Bat
   let metaRaw = '';
   const parser = tar.t({
     onReadEntry: (entry) => {
-      if (entry.path === META_ENTRY) {
+      if (isMetaEntry(entry.path)) {
         entry.on('data', (c: Buffer) => (metaRaw += c.toString('utf8')));
       } else {
         entry.resume();
@@ -62,7 +67,7 @@ export async function extractBatch(buffer: Buffer, destDir: string): Promise<Bat
   await pipeline(
     Readable.from(buffer),
     createGunzip(),
-    tar.x({ cwd: destDir, filter: (p) => p !== META_ENTRY }),
+    tar.x({ cwd: destDir, filter: (p) => !isMetaEntry(p) }),
   );
   if (metaRaw === '') {
     throw new Error('file batch response is missing its .ferry-meta.json trailer');
@@ -84,7 +89,7 @@ async function fetchBatch(client: FerryClient, paths: string[], destDir: string)
     if (meta.complete) {
       break;
     }
-    if (meta.next_index <= 0) {
+    if (!Number.isInteger(meta.next_index) || meta.next_index <= 0) {
       throw new Error('server made no progress on a file batch - aborting to avoid an infinite loop');
     }
     remaining = remaining.slice(meta.next_index);
@@ -97,21 +102,33 @@ async function fetchOversized(client: FerryClient, entry: { path: string; size: 
   const dest = join(destDir, entry.path);
   await fsp.mkdir(dirname(dest), { recursive: true });
   const out = createWriteStream(dest);
+  let writeError: Error | null = null;
+  out.on('error', (err) => { writeError = err; });
   for (let offset = 0; offset < entry.size; offset += RANGE_CHUNK) {
+    if (writeError) throw writeError;
     const { stream } = await client.postStream('/ferry/v1/files', {
       path: entry.path,
       offset,
       length: Math.min(RANGE_CHUNK, entry.size - offset),
     });
     for await (const chunk of stream) {
+      if (writeError) throw writeError;
       if (!out.write(chunk)) {
-        await new Promise<void>((resolve) => out.once('drain', () => resolve()));
+        // 'drain' never fires once the stream has errored, so also resolve on 'error'
+        // (rather than reject) and let the writeError check above/below handle it.
+        await new Promise<void>((resolve) => {
+          const onDrain = () => { out.off('error', onError); resolve(); };
+          const onError = () => { out.off('drain', onDrain); resolve(); };
+          out.once('drain', onDrain);
+          out.once('error', onError);
+        });
       }
     }
   }
+  if (writeError) throw writeError;
   await new Promise<void>((resolve, reject) => {
-    out.on('error', reject);
-    out.end(resolve);
+    if (writeError) { reject(writeError); return; }
+    out.end(() => (writeError ? reject(writeError) : resolve()));
   });
 }
 
