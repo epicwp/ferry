@@ -24,7 +24,12 @@ export interface DbTableFixture {
  */
 export async function startMockPlugin(
   fixtureDir: string,
-  opts: { partialFirstBatch?: boolean; dbTables?: DbTableFixture[] } = {},
+  opts: {
+    partialFirstBatch?: boolean;
+    dbTables?: DbTableFixture[];
+    info?: object;
+    manifest?: { path: string; size: number; hash: null }[];
+  } = {},
 ): Promise<MockPlugin> {
   let firstFilesCall = true;
 
@@ -79,6 +84,23 @@ export async function startMockPlugin(
       res.setHeader('X-Complete', batch.complete ? '1' : '0');
       res.setHeader('X-Last-Key', String(batch.lastKey));
       res.end(gzipSync(Buffer.from(batch.sql)));
+      return;
+    }
+    if (url.pathname === '/wp-json/ferry/v1/info' && req.method === 'GET') {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify(opts.info ?? {}));
+      return;
+    }
+    if (url.pathname === '/wp-json/ferry/v1/manifest' && req.method === 'GET') {
+      const manifest = opts.manifest ?? [];
+      const after = Number(url.searchParams.get('after') ?? '0');
+      const batchSize = Math.max(1, Math.ceil(manifest.length / 2)); // force one resume round-trip
+      const files = manifest.slice(after, after + batchSize);
+      const next = after + files.length;
+      res.setHeader('content-type', 'application/json');
+      res.setHeader('X-Complete', next >= manifest.length ? '1' : '0');
+      res.setHeader('X-Next-Index', String(next));
+      res.end(JSON.stringify({ files }));
       return;
     }
     if (url.pathname !== '/wp-json/ferry/v1/files' || req.method !== 'POST') {
