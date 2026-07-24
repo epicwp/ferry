@@ -6,6 +6,7 @@ import { DdevEnv, type CloneEnv } from './env/ddev.js';
 import { applyOverlay, finalizeClone } from './overlay.js';
 import { ferryHome, loadProfile, saveProfile, type SiteInfo } from './profile.js';
 import { resolve } from './resolve.js';
+import { commitProduction, ensureRepo, neutralizeNestedGit, writeClaudeMd, writeGitignore } from './git.js';
 import { fetchAll } from './transfer.js';
 
 export interface PullResult {
@@ -13,6 +14,8 @@ export interface PullResult {
   adminUser: string;
   adminPassword: string;
   skipped: string[];
+  commit: string;
+  neutralizedRepos: number;
 }
 
 /** The §4.6 flow. DDEV provisioning starts early and is awaited late ("join"). */
@@ -40,12 +43,27 @@ export async function pull(slug: string, deps: { env?: CloneEnv } = {}): Promise
   const { skipped } = await fetchAll(client, entries, docroot);
   await finalizeClone(docroot, info);                     // phase 2: drop-ins arrived with the pull
 
+  // Git substrate: neutralize nested repos BEFORE init so git never treats one as a submodule,
+  // then commit the WP-root tree as a `production` snapshot (DB stays outside git).
+  const neutralized = await neutralizeNestedGit(docroot);
+  await ensureRepo(docroot);
+  await writeGitignore(docroot);
+  await writeClaudeMd(docroot);
+  const commit = await commitProduction(docroot, entries.map((e) => e.path), 'ferry: production snapshot');
+
   const dump = await pullDatabase(client, join(ferryHome(), 'sites', slug, 'db-dump'));
 
   await envReady;                                         // join (§4.6)
   await env.importDb(docroot, dump);
   const admin = await env.createAdmin(docroot);
-  return { url: env.url(slug), adminUser: admin.user, adminPassword: admin.password, skipped };
+  return {
+    url: env.url(slug),
+    adminUser: admin.user,
+    adminPassword: admin.password,
+    skipped,
+    commit,
+    neutralizedRepos: neutralized.length,
+  };
 }
 
 async function fetchManifest(client: FerryClient): Promise<ManifestEntry[]> {

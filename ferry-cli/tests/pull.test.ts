@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -54,6 +55,9 @@ describe('pull', () => {
     writeFileSync(join(fixture, 'index.php'), '<?php // wp');
     writeFileSync(join(fixture, 'wp-load.php'), '<?php // load');
     writeFileSync(join(fixture, 'wp-content/object-cache.php'), '<?php // redis');
+    mkdirSync(join(fixture, 'wp-content/plugins/foo/.git'), { recursive: true });
+    writeFileSync(join(fixture, 'wp-content/plugins/foo/.git/HEAD'), 'ref: refs/heads/main\n');
+    writeFileSync(join(fixture, 'wp-content/plugins/foo/plugin.php'), '<?php // bundled plugin');
   });
 
   afterEach(() => {
@@ -68,8 +72,13 @@ describe('pull', () => {
   }
 
   it('runs the full §4.6 flow', async () => {
-    const manifest = ['index.php', 'wp-load.php', 'wp-content/object-cache.php']
-      .map((p) => ({ path: p, size: sizeOf(fixture, p), hash: null }));
+    const manifest = [
+      'index.php',
+      'wp-load.php',
+      'wp-content/object-cache.php',
+      'wp-content/plugins/foo/.git/HEAD',
+      'wp-content/plugins/foo/plugin.php',
+    ].map((p) => ({ path: p, size: sizeOf(fixture, p), hash: null }));
     mock = await startMockPlugin(fixture, {
       info: siteInfo(),
       manifest,
@@ -93,6 +102,26 @@ describe('pull', () => {
     expect(dump).toContain('wp_options');
     const profile = JSON.parse(readFileSync(join(home, 'sites/fixture/profile.json'), 'utf8'));
     expect(profile.info.wp).toBe('6.5');
+
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: clonePath, encoding: 'utf8' }).trim();
+    expect(result.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(result.neutralizedRepos).toBe(1);
+    expect(git('rev-parse', '--abbrev-ref', 'HEAD')).toBe('production');
+    expect(existsSync(join(clonePath, 'CLAUDE.md'))).toBe(true);
+    expect(existsSync(join(clonePath, 'wp-content/plugins/foo/.git.ferry-disabled/HEAD'))).toBe(true);
+    expect(existsSync(join(clonePath, 'wp-content/plugins/foo/.git'))).toBe(false);
+    expect(git('ls-files', 'wp-content/plugins/foo/plugin.php')).toBe('wp-content/plugins/foo/plugin.php');
+    const ignored = (p: string) => {
+      try {
+        execFileSync('git', ['check-ignore', p], { cwd: clonePath });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    expect(ignored('wp-config.php')).toBe(true);
+    expect(ignored('wp-content/mu-plugins/ferry-overlay.php')).toBe(true);
+    expect(ignored('CLAUDE.md')).toBe(true);
   });
 
   it('refuses multisite before transferring anything', async () => {

@@ -29,6 +29,10 @@ program
     console.log(`✔ Clone ready: ${result.url}`);
     console.log(`  Admin: ${result.url}/wp-admin/ - ${result.adminUser} / ${result.adminPassword}`);
     console.log('  Media is not cloned - missing uploads fall back to production (302).');
+    console.log(
+      `  Committed production snapshot ${result.commit.slice(0, 7)}` +
+        (result.neutralizedRepos > 0 ? ` (${result.neutralizedRepos} nested repo(s) neutralized)` : ''),
+    );
     if (result.skipped.length > 0) {
       console.log(`  Skipped ${result.skipped.length} unreadable file(s): ${result.skipped.slice(0, 5).join(', ')}${result.skipped.length > 5 ? ', ...' : ''}`);
     }
