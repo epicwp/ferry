@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, renameSync } from 'node:fs';
+import { existsSync, renameSync, rmSync } from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 import type { SiteInfo } from './profile.js';
@@ -136,7 +136,8 @@ export function neutralizeDropIns(docroot: string): string[] {
   for (const dropIn of DROP_INS) {
     const path = join(docroot, 'wp-content', dropIn);
     const disabled = `${path}.ferry-disabled`;
-    if (existsSync(path) && !existsSync(disabled)) {
+    if (existsSync(path)) {
+      if (existsSync(disabled)) rmSync(disabled); // stale from a prior pull: fresh wins
       renameSync(path, disabled);
       renamed.push(dropIn);
     }
