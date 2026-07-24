@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync, promises as fsp } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -47,4 +47,34 @@ export async function ensureRepo(dir: string): Promise<void> {
   await runGit(dir, ['config', 'commit.gpgsign', 'false']);
   await runGit(dir, ['config', 'core.autocrlf', 'false']);
   await fsp.writeFile(join(gitDir, SENTINEL), 'This directory is a ferry clone repo. Do not remove.\n');
+}
+
+export const DISABLED = '.git.ferry-disabled';
+
+/** Rename every nested `.git` (a bundled plugin/theme repo) to `.git.ferry-disabled`,
+ *  leaving the clone's own ferry repo (marked by the sentinel) alone. */
+export async function neutralizeNestedGit(dir: string): Promise<string[]> {
+  const out: string[] = [];
+  await walk(dir, dir, out);
+  return out;
+}
+
+async function walk(root: string, current: string, out: string[]): Promise<void> {
+  const entries = await fsp.readdir(current, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (entry.name === DISABLED) continue; // already neutralized; don't descend
+    const abs = join(current, entry.name);
+    if (entry.name === '.git') {
+      if (existsSync(join(abs, SENTINEL))) continue; // our ferry repo
+      const target = join(current, DISABLED);
+      if (existsSync(target)) {
+        await fsp.rm(target, { recursive: true, force: true });
+      }
+      await fsp.rename(abs, target);
+      out.push(relative(root, target).split(/[/\\]/).join('/'));
+      continue; // never descend into a git dir
+    }
+    await walk(root, abs, out);
+  }
 }
