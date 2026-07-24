@@ -2,7 +2,7 @@ import type { ManifestEntry } from './client.js';
 import { createWriteStream, promises as fsp } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
+import { finished, pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
 import pLimit from 'p-limit';
 import * as tar from 'tar';
@@ -126,10 +126,11 @@ async function fetchOversized(client: FerryClient, entry: { path: string; size: 
     }
   }
   if (writeError) throw writeError;
-  await new Promise<void>((resolve, reject) => {
-    if (writeError) { reject(writeError); return; }
-    out.end(() => (writeError ? reject(writeError) : resolve()));
-  });
+  out.end();
+  await finished(out); // rejects on any stream error, including one already emitted
+  if (writeError) {
+    throw writeError;
+  }
 }
 
 export async function fetchAll(

@@ -49,4 +49,12 @@ describe('fetchAll', () => {
     expect(readFileSync(join(dest, 'big.bin'))).toEqual(Buffer.alloc(300, 7));
     expect(existsSync(join(dest, '.ferry-meta.json'))).toBe(false);
   });
+
+  it('rejects when an oversized destination cannot be written', async () => {
+    mock = await startMockPlugin(fixture);
+    const client = new FerryClient(mock.base, 'irrelevant');
+    mkdirSync(join(dest, 'big.bin'), { recursive: true }); // dest path occupied by a directory
+    const entries = [{ path: 'big.bin', size: 300, hash: null }];
+    await expect(fetchAll(client, entries, dest, { maxBytes: 100 })).rejects.toThrow();
+  });
 });
