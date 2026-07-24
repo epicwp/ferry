@@ -1,0 +1,6 @@
+{
+  "name": "ferry/plugin",
+  "description": "Ferry Connect - read-only transport plugin (dev tooling only; the plugin itself has zero runtime dependencies)",
+  "require": { "php": ">=7.2" },
+  "require-dev": { "phpunit/phpunit": "^9.6" }
+}
