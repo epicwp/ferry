@@ -2,11 +2,19 @@ import { createServer, type Server } from 'node:http';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import * as tar from 'tar';
 
 export interface MockPlugin {
   base: string;
   close(): void;
+}
+
+export interface DbBatchFixture { sql: string; lastKey: number; complete: boolean; }
+export interface DbTableFixture {
+  name: string; rows: number; bytes: number;
+  pk: string | null; maxpk: number | null;
+  batches: DbBatchFixture[];
 }
 
 /**
@@ -16,7 +24,7 @@ export interface MockPlugin {
  */
 export async function startMockPlugin(
   fixtureDir: string,
-  opts: { partialFirstBatch?: boolean } = {},
+  opts: { partialFirstBatch?: boolean; dbTables?: DbTableFixture[] } = {},
 ): Promise<MockPlugin> {
   let firstFilesCall = true;
 
@@ -42,6 +50,37 @@ export async function startMockPlugin(
 
   const server: Server = createServer((req, res) => {
     const url = new URL(req.url!, 'http://x');
+    if (url.pathname === '/wp-json/ferry/v1/db/tables' && req.method === 'GET') {
+      const tables = (opts.dbTables ?? []).map(({ batches, ...t }) => t);
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ tables }));
+      return;
+    }
+    if (url.pathname === '/wp-json/ferry/v1/db' && req.method === 'GET') {
+      const table = (opts.dbTables ?? []).find((t) => t.name === url.searchParams.get('table'));
+      if (!table) {
+        res.statusCode = 404;
+        res.end('{"code":"ferry_unknown_table"}');
+        return;
+      }
+      if (table.pk !== null && url.searchParams.get('before') !== String(table.maxpk)) {
+        res.statusCode = 500;
+        res.end('missing or wrong before= snapshot bound');
+        return;
+      }
+      const after = Number(url.searchParams.get('after'));
+      const batch = table.batches.find((b, i) => (i === 0 ? after === 0 : after === table.batches[i - 1].lastKey));
+      if (!batch) {
+        res.statusCode = 500;
+        res.end(`no scripted batch for after=${after}`);
+        return;
+      }
+      res.setHeader('content-type', 'application/gzip');
+      res.setHeader('X-Complete', batch.complete ? '1' : '0');
+      res.setHeader('X-Last-Key', String(batch.lastKey));
+      res.end(gzipSync(Buffer.from(batch.sql)));
+      return;
+    }
     if (url.pathname !== '/wp-json/ferry/v1/files' || req.method !== 'POST') {
       res.statusCode = 404;
       res.end('not found');
