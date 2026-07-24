@@ -35,6 +35,7 @@ final class ExcludesTest extends TestCase
             ['wp-content/debug.log'],
             ['error_log'],
             ['wp-admin/error_log'],                        // error_log appears in many directories
+            ['wp-content/mu-plugins/ferry-overlay.php'],
         ];
     }
 
@@ -47,6 +48,7 @@ final class ExcludesTest extends TestCase
             ['wp-content/plugins/woocommerce/woocommerce.php'],
             ['wp-content/cachetest.php'],                  // prefix match must respect the slash
             ['wp-content/mu-plugins/loader.php'],
+            ['wp-content/mu-plugins/other-plugin.php'],
         ];
     }
 }

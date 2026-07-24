@@ -22,6 +22,7 @@ final class Excludes
     const FILES = [
         'wp-config.php',                  // §4.4: never over the bridge, even on explicit request
         'wp-content/debug.log',           // retrievable via control plane later, not pulled
+        'wp-content/mu-plugins/ferry-overlay.php',  // ferry's own overlay - production must never clobber the clone's copy
     ];
 
     const BASENAMES = ['error_log'];
