@@ -85,8 +85,9 @@ export class FerryClient {
       for (const [k, v] of Object.entries(query)) {
         url.searchParams.set(k, v);
       }
+      let res: Dispatcher.ResponseData;
       try {
-        const res = await request(url, {
+        res = await request(url, {
           method,
           body: body === '' ? undefined : body,
           headers: {
@@ -95,21 +96,29 @@ export class FerryClient {
             'x-ferry-signature': sign(this.secret, method, route, query, body, timestamp),
           },
         });
-        if (RETRYABLE.has(res.statusCode) && attempt < MAX_ATTEMPTS) {
-          await res.body.text();
-          const retryAfter = Number(res.headers['retry-after']);
-          const delay = Number.isFinite(retryAfter) && retryAfter >= 0 ? retryAfter * 1000 : 500 * 2 ** attempt;
-          await sleep(delay);
-          continue;
-        }
-        return res;
       } catch (err) {
         lastError = err;
         if (attempt === MAX_ATTEMPTS) {
           break;
         }
         await sleep(500 * 2 ** attempt);
+        continue;
       }
+      if (RETRYABLE.has(res.statusCode)) {
+        const text = await res.body.text();
+        if (attempt === MAX_ATTEMPTS) {
+          throw new Error(
+            `${method} ${route}: still failing with HTTP ${res.statusCode} after ${MAX_ATTEMPTS} attempts. ` +
+              `If a security plugin (e.g. Wordfence) runs on the site, allowlist the /wp-json/ferry/v1 namespace. ` +
+              `Last response: ${text.slice(0, 300)}`,
+          );
+        }
+        const retryAfter = Number(res.headers['retry-after']);
+        const delay = Number.isFinite(retryAfter) && retryAfter >= 0 ? retryAfter * 1000 : 500 * 2 ** attempt;
+        await sleep(delay);
+        continue;
+      }
+      return res;
     }
     throw new Error(
       `${method} ${route}: request failed after ${MAX_ATTEMPTS} attempts. ` +

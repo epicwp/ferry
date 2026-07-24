@@ -79,4 +79,22 @@ describe('FerryClient', () => {
     const client = new FerryClient(base, SECRET);
     await expect(client.getJson('/ferry/v1/info')).rejects.toThrowError(/403.*ferry_unpaired/s);
   });
+
+  it('throws allowlist guidance when retryable statuses exhaust all attempts', async () => {
+    let calls = 0;
+    const base = await listen((req, res) => {
+      const url = new URL(req.url!, 'http://x');
+      if (url.pathname === '/wp-json/') {
+        res.end('{}');
+        return;
+      }
+      calls++;
+      res.statusCode = 503;
+      res.setHeader('Retry-After', '0');
+      res.end('rate limited');
+    });
+    const client = new FerryClient(base, SECRET);
+    await expect(client.getJson('/ferry/v1/info')).rejects.toThrowError(/allowlist.*ferry\/v1/s);
+    expect(calls).toBe(5);
+  });
 });
