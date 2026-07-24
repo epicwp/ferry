@@ -46,6 +46,15 @@ final class TarTest extends TestCase
         $this->assertSame('deep', file_get_contents($phar[$name]->getPathname()));
     }
 
+    public function test_prefix_split_at_exact_155_boundary(): void
+    {
+        $name = str_repeat('a', 155) . '/' . str_repeat('b', 50); // slash at index 155: valid ustar split
+        [, $phar] = $this->extract(function (Tar $tar) use ($name) {
+            $tar->add_file($name, 'boundary');
+        });
+        $this->assertSame('boundary', file_get_contents($phar[$name]->getPathname()));
+    }
+
     public function test_unsplittable_path_throws(): void
     {
         $this->expectException(\RuntimeException::class);

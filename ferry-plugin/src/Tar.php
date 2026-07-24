@@ -29,7 +29,7 @@ final class Tar
         ($this->write)($this->header($name, $size, $mtime, $mode));
         $sent = 0;
         while ($sent < $size && !feof($fh)) {
-            $chunk = fread($fh, 512 * 1024);
+            $chunk = fread($fh, (int) min(512 * 1024, $size - $sent));
             if ($chunk === false || $chunk === '') {
                 break;
             }
@@ -59,7 +59,7 @@ final class Tar
     {
         $prefix = '';
         if (strlen($name) > 100) {
-            $pos = strrpos(substr($name, 0, 155), '/');
+            $pos = strrpos(substr($name, 0, 156), '/');
             if ($pos === false || strlen($name) - $pos - 1 > 100) {
                 throw new \RuntimeException("path does not fit ustar name/prefix fields: $name");
             }
