@@ -1,0 +1,24 @@
+{
+  "name": "ferry-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "ferry": "./dist/main.js" },
+  "scripts": {
+    "ferry": "tsx src/main.ts",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "p-limit": "^6.1.0",
+    "tar": "^7.4.3",
+    "undici": "^6.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.0"
+  }
+}
