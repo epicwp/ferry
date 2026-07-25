@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { Engine } from '../../src/engine.js';
 import { buildApp, type AppDeps } from '../../src/app.js';
 import { Store } from '../../src/store.js';
 
@@ -13,4 +14,15 @@ export async function signup(app: FastifyInstance, email = 'user@example.com', p
   if (res.statusCode !== 200) throw new Error(`signup failed: ${res.statusCode} ${res.body}`);
   const cookie = res.headers['set-cookie'];
   return (Array.isArray(cookie) ? cookie[0]! : cookie!).split(';')[0]!;
+}
+
+export function stubEngine(overrides: Partial<Engine> = {}): Engine {
+  return {
+    link: () => Promise.reject(new Error('not stubbed')),
+    pull: () => Promise.reject(new Error('not stubbed')),
+    siteInfo: () => Promise.reject(new Error('not stubbed')),
+    verifyClone: () => Promise.reject(new Error('not stubbed')),
+    cloneUrl: (slug: string) => `https://${slug}.ddev.site`,
+    ...overrides,
+  };
 }

@@ -45,4 +45,54 @@ export function siteRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (!site) return reply.code(404).send({ error: 'Site not found.' });
     return siteJson(site);
   });
+
+  const engine = deps.engine;
+  if (!engine) return; // app built without an engine (store-only tests)
+
+  app.post('/api/sites/:id/pair', { preHandler: app.requireUser }, async (request, reply) => {
+    const site = deps.store.siteFor(request.user.id, Number((request.params as { id: string }).id));
+    if (!site) return reply.code(404).send({ error: 'Site not found.' });
+    if (site.status !== 'new' && site.status !== 'refused_multisite') {
+      return reply.code(409).send({ error: 'This site is already paired.' });
+    }
+    const { code } = (request.body ?? {}) as { code?: string };
+    if (!code || code.trim() === '') {
+      return reply.code(400).send({ error: 'Enter the pairing code shown by the plugin.' });
+    }
+    try {
+      await engine.link(site.url, code.trim());
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/multisite/i.test(message)) {
+        deps.store.setStatus(site.id, 'refused_multisite', { lastError: message });
+        return reply.code(422).send({ error: message });
+      }
+      return reply.code(400).send({ error: message });
+    }
+    deps.store.setStatus(site.id, 'paired', { lastError: null });
+    return siteJson(deps.store.siteFor(request.user.id, site.id)!);
+  });
+
+  app.post('/api/sites/:id/test', { preHandler: app.requireUser }, async (request, reply) => {
+    const site = deps.store.siteFor(request.user.id, Number((request.params as { id: string }).id));
+    if (!site) return reply.code(404).send({ error: 'Site not found.' });
+    if (site.status === 'new' || site.status === 'refused_multisite') {
+      return reply.code(409).send({ error: 'Pair the site first.' });
+    }
+    try {
+      const info = await engine.siteInfo(site.slug);
+      return {
+        wp: info.wp,
+        php: info.php.version,
+        db: `${info.db.server} ${info.db.version}`,
+        server: info.server,
+      };
+    } catch (err) {
+      let message = err instanceof Error ? err.message : String(err);
+      if (message.includes('(403)')) {
+        message += ' — is a security plugin blocking the ferry REST namespace?'; // spec §3.4
+      }
+      return reply.code(502).send({ error: message });
+    }
+  });
 }
