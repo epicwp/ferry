@@ -14,6 +14,7 @@ describe('plugin zip', () => {
     expect(entries.some((e) => e.startsWith('ferry-connect/src/'))).toBe(true);
     expect(entries.some((e) => e.includes('/vendor/') || e.includes('/tests/'))).toBe(false);
     expect(entries.every((e) => e.startsWith('ferry-connect/'))).toBe(true);
+    expect(entries.some((e) => e.split('/').some((part) => part.startsWith('.')))).toBe(false);
   });
 
   it('serves the zip to signed-in users only', async () => {

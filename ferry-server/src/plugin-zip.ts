@@ -9,6 +9,7 @@ export function buildPluginZip(pluginDir: string): Buffer {
   const files: Record<string, Uint8Array> = {};
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir)) {
+      if (entry.startsWith('.')) continue;
       const abs = join(dir, entry);
       const rel = relative(pluginDir, abs);
       if (EXCLUDE_TOP.has(rel.split(sep)[0]!)) continue;
