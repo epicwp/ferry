@@ -16,6 +16,8 @@ Everything in this document was discussed and decided in the design session. Whe
 
 **Target audience:** developers and agencies (not site owners — they don't know they need this). Market assessment from the session: **8/10** — cloning already exists (WP Migrate, InstaWP, BlogVault), but agent-native debugging plus safe push-back with drift detection is something nobody does. Timing is perfect; execution and distribution will determine success.
 
+**Decision (2026-07-25): Ferry is a dev environment, not a hosted test site.** The clone exists for the agent to investigate, change, and verify — the customer never browses it. Trust and approval run through the change card (§13): plain-language summary, diff, smoke test, and screenshots the agent takes inside the clone's VM. Public preview URLs are deliberately deferred (§14); the dashboard design should not show a clickable clone domain.
+
 ### End-vision flow (user perspective)
 
 1. User creates an account on agent-ferry.com.
@@ -203,6 +205,7 @@ The GitHub PR pattern, translated for non-technical users. One card with layers,
 ```
 
 - **Top:** a plain-language summary, written by the agent — that is what a site owner reads and decides on. **Expandable below:** the technical diff and DB operations (old → new), for the developer/agency. Plus the drift-check status and what the smoke test will verify. One card serves both audiences without scaring anyone off.
+- **Screenshots of affected pages**, taken by the agent inside the clone's VM. For visual changes this is the approval evidence — it replaces a browsable preview site (§1 decision).
 - **One button, "Push to production".** Nothing ever goes to production automatically without that single human click.
 - During the push: live progress. Afterwards: the smoke test result and a **rollback button that stays visible** — undoing is one click, not a support ticket.
 - The card appears **inline in the chat** (that's where you decide, in the context of the conversation) and also lives as a **standalone object** in a "Changes" tab per site, with status (draft, pushed, rolled back). Same model as GitHub: the discussion happens in the conversation, but the PR has its own page. Important for later: a card can then be shared ("could you approve this?") without making anyone read the whole chat.
@@ -214,6 +217,7 @@ The GitHub PR pattern, translated for non-technical users. One card with layers,
 - **FastCDC content-defined chunking** (restic/borg pattern) instead of whole-file hashes — deduplicates across all customer sites, makes refreshes of large files cheaper.
 - **PAKE** for pairing (see §13).
 - **Provider choice for Firecracker hosting** (Fly.io or otherwise).
+- **Ingress / public clone domains.** Per the §1 decision the clone is agent-only: `*.ddev.site` resolves to 127.0.0.1, reachable for the agent (same VM) but never for the customer's browser — and that is fine. If customers ever ask for a browsable preview, it needs an own wildcard domain (e.g. `*.sites.agent-ferry.com`) plus routing to the per-site VM — decide together with the provider choice above. The code already isolates the domain behind `CloneEnv.url()` and the runtime siteurl swap, so this is infra + one env implementation, no data migration.
 - **Pull validation via existing migration plugins** (Duplicator, UpdraftPlus, All-in-One WP Migration) — recorded as a task.
 
 ## 15. Open points (not yet discussed)
