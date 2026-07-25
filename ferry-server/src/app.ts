@@ -2,6 +2,7 @@ import cookie from '@fastify/cookie';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Engine } from './engine.js';
 import { authRoutes } from './routes/auth.js';
+import { siteRoutes } from './routes/sites.js';
 import type { Store, User } from './store.js';
 
 export const SESSION_COOKIE = 'ferry_session';
@@ -35,6 +36,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.decorate('requireUser', requireUser);
 
   authRoutes(app, deps);
+  siteRoutes(app, deps);
   return app;
 }
 
