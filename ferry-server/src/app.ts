@@ -25,19 +25,19 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify();
   void app.register(cookie);
 
-  // Some routes (e.g. POST .../test, .../sync) are called with an application/json
-  // content-type but no body. Fastify's default parser rejects an empty body for that
-  // content-type; treat it as "no body" instead.
-  app.addContentTypeParser('application/json', { parseAs: 'string' }, (_request, body, done) => {
-    if (body === '') {
+  // Registered for all application/json requests. Some routes (e.g. POST .../test,
+  // .../sync) are called with that content-type but no body, which Fastify's default
+  // parser rejects (FST_ERR_CTP_EMPTY_JSON_BODY); treat an empty/whitespace body as
+  // "no body" instead. Any non-empty body is handed to Fastify's own default JSON
+  // parser unchanged, so secure-json-parse (proto/constructor poisoning guards) and
+  // the 400-on-malformed-JSON behavior are unaffected.
+  const defaultJsonParser = app.getDefaultJsonParser('error', 'error');
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (request, body: string, done) => {
+    if (body.trim() === '') {
       done(null, undefined);
       return;
     }
-    try {
-      done(null, JSON.parse(body as string));
-    } catch (err) {
-      done(err as Error, undefined);
-    }
+    defaultJsonParser(request, body, done);
   });
 
   // Session gate for everything private. Routes opt in via { preHandler: app.requireUser }.

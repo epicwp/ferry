@@ -45,3 +45,27 @@ describe('auth routes', () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+describe('application/json body parsing', () => {
+  it('accepts an empty body on a bodyless route (content-type sent, no payload)', async () => {
+    const { app } = makeApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/logout',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(res.statusCode).toBe(204); // not 400/500 from the JSON parser
+  });
+
+  it('rejects malformed JSON with 400, not 500, and does not leak the parser message', async () => {
+    const { app } = makeApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/signup',
+      headers: { 'content-type': 'application/json' },
+      payload: '{not valid json',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.body).not.toContain('Unexpected token');
+  });
+});
