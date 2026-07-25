@@ -6,8 +6,14 @@ import { DdevEnv, type CloneEnv } from './env/ddev.js';
 import { applyOverlay, finalizeClone } from './overlay.js';
 import { ferryHome, loadProfile, saveProfile, type SiteInfo } from './profile.js';
 import { resolve } from './resolve.js';
+import { cleanTmp } from './provenance/cache.js';
+import { reconstruct } from './provenance/reconstruct.js';
+import { buildReport, summarize, writeReport } from './provenance/report.js';
+import type { WporgEndpoints } from './provenance/wporg.js';
 import { commitProduction, ensureRepo, neutralizeNestedGit, writeClaudeMd, writeGitignore } from './git.js';
 import { fetchAll } from './transfer.js';
+
+export interface PullDeps { env?: CloneEnv; wporg?: WporgEndpoints; cacheDir?: string }
 
 export interface PullResult {
   url: string;
@@ -16,10 +22,11 @@ export interface PullResult {
   skipped: string[];
   commit: string;
   neutralizedRepos: number;
+  provenance: { reportPath: string; summary: string; reused: number; reconstructed: number; fetched: number };
 }
 
 /** The §4.6 flow. DDEV provisioning starts early and is awaited late ("join"). */
-export async function pull(slug: string, deps: { env?: CloneEnv } = {}): Promise<PullResult> {
+export async function pull(slug: string, deps: PullDeps = {}): Promise<PullResult> {
   const env = deps.env ?? new DdevEnv();
   const profile = loadProfile(slug);
   const client = new FerryClient(profile.url, profile.secret);
@@ -38,9 +45,23 @@ export async function pull(slug: string, deps: { env?: CloneEnv } = {}): Promise
   const envReady = env.provision(docroot, info, slug);    // boots while the transport runs
   envReady.catch(() => {});                               // surfaced at the await below
 
+  const cacheDir = deps.cacheDir ?? join(ferryHome(), 'cache');
+  cleanTmp(cacheDir);
   const manifest = await fetchManifest(client);
-  const entries = resolve(manifest);
-  const { skipped } = await fetchAll(client, entries, docroot);
+  const plan = await resolve(manifest, info, { docroot, cacheDir, wporg: deps.wporg });
+  const report = buildReport(plan.evidence, plan.unverified);
+  const reportPath = writeReport(slug, report);
+  const [fetched, rec] = await Promise.all([
+    fetchAll(client, plan.fetch, docroot),
+    reconstruct(plan.reconstruct, docroot),
+  ]);
+  const skipped = [...fetched.skipped];
+  if (rec.failed.length > 0) {
+    // cache let us down (corruption): demote to the bucket that always works
+    const byPath = new Map(manifest.map((e) => [e.path, e]));
+    const retry = rec.failed.map((f) => byPath.get(f.path)).filter((e): e is ManifestEntry => e !== undefined);
+    skipped.push(...(await fetchAll(client, retry, docroot)).skipped);
+  }
   await finalizeClone(docroot, info);                     // phase 2: drop-ins arrived with the pull
 
   // Git substrate: neutralize nested repos BEFORE init so git never treats one as a submodule,
@@ -49,7 +70,7 @@ export async function pull(slug: string, deps: { env?: CloneEnv } = {}): Promise
   await ensureRepo(docroot);
   await writeGitignore(docroot);
   await writeClaudeMd(docroot);
-  const commit = await commitProduction(docroot, entries.map((e) => e.path), 'ferry: production snapshot');
+  const commit = await commitProduction(docroot, manifest.map((e) => e.path), 'ferry: production snapshot');
 
   const dump = await pullDatabase(client, join(ferryHome(), 'sites', slug, 'db-dump'));
 
@@ -63,6 +84,13 @@ export async function pull(slug: string, deps: { env?: CloneEnv } = {}): Promise
     skipped,
     commit,
     neutralizedRepos: neutralized.length,
+    provenance: {
+      reportPath,
+      summary: summarize(report),
+      reused: plan.reuse.length,
+      reconstructed: plan.reconstruct.length - rec.failed.length,
+      fetched: plan.fetch.length + rec.failed.length,
+    },
   };
 }
 

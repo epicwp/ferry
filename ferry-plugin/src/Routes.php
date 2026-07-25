@@ -90,6 +90,9 @@ final class Routes
             'prefix'    => $wpdb->prefix,
             'abspath'   => ABSPATH,
             'siteurl'   => get_option('siteurl'),
+            'locale'    => get_locale(),
+            'plugins'   => Hints::plugins(self::installed_plugins()),
+            'themes'    => Hints::themes(self::installed_themes()),
         ];
     }
 
@@ -217,5 +220,24 @@ final class Routes
         header('X-Last-Key: ' . $result['last_key']);
         echo gzencode($result['sql'], 6);
         exit;
+    }
+
+    /** @return array<string, array<string, mixed>> */
+    private static function installed_plugins(): array
+    {
+        if (!function_exists('get_plugins')) {
+            require_once ABSPATH . 'wp-admin/includes/plugin.php';
+        }
+        return get_plugins();
+    }
+
+    /** @return array<string, string> stylesheet => version */
+    private static function installed_themes(): array
+    {
+        $out = [];
+        foreach (wp_get_themes() as $stylesheet => $theme) {
+            $out[$stylesheet] = (string) $theme->get('Version');
+        }
+        return $out;
     }
 }

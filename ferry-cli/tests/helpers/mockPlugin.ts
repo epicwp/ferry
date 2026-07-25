@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,6 +8,7 @@ import * as tar from 'tar';
 
 export interface MockPlugin {
   base: string;
+  requests: { files: string[][] };
   close(): void;
 }
 
@@ -28,10 +30,11 @@ export async function startMockPlugin(
     partialFirstBatch?: boolean;
     dbTables?: DbTableFixture[];
     info?: object;
-    manifest?: { path: string; size: number; hash: null }[];
+    manifest?: { path: string; size: number; hash: string | null }[];
   } = {},
 ): Promise<MockPlugin> {
   let firstFilesCall = true;
+  const requests = { files: [] as string[][] };
 
   async function buildBatch(paths: string[], complete: boolean, nextIndex: number): Promise<Buffer> {
     const staging = mkdtempSync(join(tmpdir(), 'ferry-mock-'));
@@ -120,6 +123,7 @@ export async function startMockPlugin(
         return;
       }
       const paths: string[] = params.paths;
+      requests.files.push(paths);
       res.setHeader('content-type', 'application/gzip');
       if (opts.partialFirstBatch && firstFilesCall && paths.length > 1) {
         firstFilesCall = false;
@@ -136,10 +140,15 @@ export async function startMockPlugin(
       resolve(`http://127.0.0.1:${addr.port}`);
     });
   });
-  return { base, close: () => server.close() };
+  return { base, requests, close: () => server.close() };
 }
 
 /** Size helper for building manifests from fixtures. */
 export function sizeOf(fixtureDir: string, path: string): number {
   return statSync(join(fixtureDir, path)).size;
+}
+
+/** MD5 helper for building hash-bearing manifests from fixtures. */
+export function hashOf(fixtureDir: string, path: string): string {
+  return createHash('md5').update(readFileSync(join(fixtureDir, path))).digest('hex');
 }
