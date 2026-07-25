@@ -3,6 +3,8 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import type { Engine } from './engine.js';
 import { authRoutes } from './routes/auth.js';
 import { siteRoutes } from './routes/sites.js';
+import { syncRoutes } from './routes/sync.js';
+import { SyncManager } from './sync.js';
 import type { Store, User } from './store.js';
 
 export const SESSION_COOKIE = 'ferry_session';
@@ -37,6 +39,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
 
   authRoutes(app, deps);
   siteRoutes(app, deps);
+  if (deps.engine) {
+    syncRoutes(app, deps, new SyncManager(deps.store, deps.engine));
+  }
   return app;
 }
 
