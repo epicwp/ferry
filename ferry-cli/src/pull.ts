@@ -13,9 +13,18 @@ import type { WporgEndpoints } from './provenance/wporg.js';
 import { commitProduction, ensureRepo, neutralizeNestedGit, writeClaudeMd, writeGitignore } from './git.js';
 import { fetchAll, fetchManifest } from './transfer.js';
 
+export type PullPhase = 'info' | 'manifest' | 'resolve' | 'files' | 'git' | 'db' | 'import' | 'done';
+
+export interface PullProgress {
+  phase: PullPhase;
+  detail?: string;
+  current?: number;
+  total?: number;
+}
+
 export interface PullDeps { env?: CloneEnv; wporg?: WporgEndpoints; cacheDir?: string }
 
-export interface PullOpts { full?: boolean }
+export interface PullOpts { full?: boolean; onProgress?: (e: PullProgress) => void }
 
 export interface PullResult {
   url: string;
@@ -42,6 +51,9 @@ export async function pull(slug: string, deps: PullDeps = {}, opts: PullOpts = {
   profile.info = info;
   saveProfile(profile);
 
+  const progress = opts.onProgress ?? (() => {});
+  progress({ phase: 'info', detail: `WordPress ${info.wp}, PHP ${info.php.version}` });
+
   const docroot = profile.clonePath;
   await fsp.mkdir(docroot, { recursive: true });
   await applyOverlay(docroot, info, env.url(slug));       // phase 1: files DDEV needs at boot
@@ -51,11 +63,16 @@ export async function pull(slug: string, deps: PullDeps = {}, opts: PullOpts = {
   const cacheDir = deps.cacheDir ?? join(ferryHome(), 'cache');
   cleanTmp(cacheDir);
   const manifest = await fetchManifest(client);
+  progress({ phase: 'manifest', total: manifest.length });
   const plan = await resolve(manifest, info, { docroot, cacheDir, wporg: deps.wporg });
   const report = buildReport(plan.evidence, plan.unverified);
   const reportPath = writeReport(slug, report);
+  progress({ phase: 'resolve', detail: summarize(report) });
+  progress({ phase: 'files', current: 0, total: plan.fetch.length });
   const [fetched, rec] = await Promise.all([
-    fetchAll(client, plan.fetch, docroot),
+    fetchAll(client, plan.fetch, docroot, {
+      onProgress: (done, total) => progress({ phase: 'files', current: done, total }),
+    }),
     reconstruct(plan.reconstruct, docroot),
   ]);
   const skipped = [...fetched.skipped];
@@ -74,13 +91,17 @@ export async function pull(slug: string, deps: PullDeps = {}, opts: PullOpts = {
   await writeGitignore(docroot);
   await writeClaudeMd(docroot);
   const commit = await commitProduction(docroot, manifest.map((e) => e.path), 'ferry: production snapshot');
+  progress({ phase: 'git', detail: commit.slice(0, 7) });
 
   const liteSkip = opts.full ? [] : LITE_SKIP;
-  const dump = await pullDatabase(client, join(ferryHome(), 'sites', slug, 'db-dump'), liteSkip);
+  const dump = await pullDatabase(client, join(ferryHome(), 'sites', slug, 'db-dump'), liteSkip,
+    (done, total, name) => progress({ phase: 'db', current: done, total, detail: name }));
+  progress({ phase: 'import' });
 
   await envReady;                                         // join (§4.6)
   await env.importDb(docroot, dump);
   const admin = await env.createAdmin(docroot);
+  progress({ phase: 'done' });
   return {
     url: env.url(slug),
     adminUser: admin.user,
