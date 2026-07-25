@@ -8,7 +8,7 @@ import * as tar from 'tar';
 
 export interface MockPlugin {
   base: string;
-  requests: { files: string[][]; db: Record<string, string>[] };
+  requests: { files: string[][]; db: Record<string, string>[]; manifest: Record<string, string>[] };
   close(): void;
 }
 
@@ -35,7 +35,7 @@ export async function startMockPlugin(
   } = {},
 ): Promise<MockPlugin> {
   let firstFilesCall = true;
-  const requests = { files: [] as string[][], db: [] as Record<string, string>[] };
+  const requests = { files: [] as string[][], db: [] as Record<string, string>[], manifest: [] as Record<string, string>[] };
 
   async function buildBatch(paths: string[], complete: boolean, nextIndex: number): Promise<Buffer> {
     const staging = mkdtempSync(join(tmpdir(), 'ferry-mock-'));
@@ -101,6 +101,7 @@ export async function startMockPlugin(
       return;
     }
     if (url.pathname === '/wp-json/ferry/v1/manifest' && req.method === 'GET') {
+      requests.manifest.push(Object.fromEntries(url.searchParams.entries()));
       const manifest = opts.manifest ?? [];
       const after = Number(url.searchParams.get('after') ?? '0');
       const batchSize = Math.max(1, Math.ceil(manifest.length / 2)); // force one resume round-trip

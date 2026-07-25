@@ -11,7 +11,7 @@ import { reconstruct } from './provenance/reconstruct.js';
 import { buildReport, summarize, writeReport } from './provenance/report.js';
 import type { WporgEndpoints } from './provenance/wporg.js';
 import { commitProduction, ensureRepo, neutralizeNestedGit, writeClaudeMd, writeGitignore } from './git.js';
-import { fetchAll } from './transfer.js';
+import { fetchAll, fetchManifest } from './transfer.js';
 
 export interface PullDeps { env?: CloneEnv; wporg?: WporgEndpoints; cacheDir?: string }
 
@@ -97,21 +97,4 @@ export async function pull(slug: string, deps: PullDeps = {}, opts: PullOpts = {
       fetched: plan.fetch.length + rec.failed.length,
     },
   };
-}
-
-async function fetchManifest(client: FerryClient): Promise<ManifestEntry[]> {
-  const entries: ManifestEntry[] = [];
-  let after = 0;
-  for (;;) {
-    const { data, headers } = await client.getJson('/ferry/v1/manifest', { after: String(after) });
-    entries.push(...(data.files as ManifestEntry[]));
-    if (headers['x-complete'] === '1') {
-      return entries;
-    }
-    const next = Number(headers['x-next-index']);
-    if (!Number.isFinite(next) || next <= after) {
-      throw new Error('manifest made no progress - aborting');
-    }
-    after = next;
-  }
 }

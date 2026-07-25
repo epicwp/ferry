@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import { fetchUploads } from './fetch-uploads.js';
 import { link } from './link.js';
 import { pull } from './pull.js';
 
@@ -44,6 +45,18 @@ program
     console.log(`    Report: ${result.provenance.reportPath}`);
     if (result.skipped.length > 0) {
       console.log(`  Skipped ${result.skipped.length} unreadable file(s): ${result.skipped.slice(0, 5).join(', ')}${result.skipped.length > 5 ? ', ...' : ''}`);
+    }
+  });
+
+program
+  .command('fetch-uploads <site> [prefix]')
+  .description('Materialize production uploads into the clone (e.g. 2026/07/), or everything with --all')
+  .option('--all', 'fetch every upload')
+  .action(async (site: string, prefix: string | undefined, opts: { all?: boolean }) => {
+    const result = await fetchUploads(site, { prefix, all: opts.all });
+    console.log(`✔ Materialized ${result.fetched} file(s) (${(result.bytes / 1024 / 1024).toFixed(1)} MB)`);
+    if (result.skipped.length > 0) {
+      console.log(`  Skipped ${result.skipped.length} (gone on production?): ${result.skipped.slice(0, 5).join(', ')}${result.skipped.length > 5 ? ', ...' : ''}`);
     }
   });
 

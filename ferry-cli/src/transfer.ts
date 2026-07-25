@@ -151,3 +151,23 @@ export async function fetchAll(
   await Promise.all(oversized.map((e) => limit(() => fetchOversized(client, e, destDir))));
   return { skipped: skippedLists.flat() };
 }
+
+export async function fetchManifest(
+  client: FerryClient,
+  query: Record<string, string> = {},
+): Promise<ManifestEntry[]> {
+  const entries: ManifestEntry[] = [];
+  let after = 0;
+  for (;;) {
+    const { data, headers } = await client.getJson('/ferry/v1/manifest', { ...query, after: String(after) });
+    entries.push(...(data.files as ManifestEntry[]));
+    if (headers['x-complete'] === '1') {
+      return entries;
+    }
+    const next = Number(headers['x-next-index']);
+    if (!Number.isFinite(next) || next <= after) {
+      throw new Error('manifest made no progress - aborting');
+    }
+    after = next;
+  }
+}
