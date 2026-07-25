@@ -12,6 +12,9 @@ export interface SiteInfo {
   prefix: string;
   abspath: string;
   siteurl: string;
+  locale?: string;
+  plugins?: { file: string; version: string }[];
+  themes?: { stylesheet: string; version: string }[];
 }
 
 export interface SiteProfile {
