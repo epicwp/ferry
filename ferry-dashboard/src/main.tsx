@@ -3,6 +3,8 @@ import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import { RequireAuth } from './layout';
 import { AuthPage } from './pages/auth';
 import { SitesPage } from './pages/sites';
+import { NewSitePage } from './pages/new-site';
+import { InstallPage } from './pages/install';
 import './ui.css';
 
 const router = createBrowserRouter([
@@ -11,6 +13,8 @@ const router = createBrowserRouter([
     element: <RequireAuth />,
     children: [
       { path: '/', element: <SitesPage /> },
+      { path: '/sites/new', element: <NewSitePage /> },
+      { path: '/sites/:id/install', element: <InstallPage /> },
     ],
   },
 ]);

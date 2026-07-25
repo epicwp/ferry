@@ -30,3 +30,17 @@ test('a fresh account sees the empty sites state', async ({ page }) => {
   await expect(page.getByText('no connected sites')).toBeVisible();
   await expect(page.getByText('0 sites')).toBeVisible();
 });
+
+test('creating a site shows install instructions with the plugin download', async ({ page }) => {
+  await signUp(page);
+  await page.getByRole('button', { name: 'New site' }).click();
+  await expect(page).toHaveURL('/sites/new');
+  await page.getByLabel('Name').fill('Demo');
+  await page.getByLabel('Site URL').fill('https://demo-site.example');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page).toHaveURL(/\/sites\/\d+\/install$/);
+  await expect(page.locator('a[href="/api/plugin.zip"]')).toBeVisible();
+  await expect(page.getByText('wp plugin install ferry-connect.zip --activate')).toBeVisible();
+  await page.getByRole('button', { name: /I have a code/ }).click();
+  await expect(page).toHaveURL(/\/pair$/);
+});
