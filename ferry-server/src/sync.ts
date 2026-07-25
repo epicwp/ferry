@@ -47,7 +47,7 @@ export class SyncManager {
     if (this.active.has(site.id)) throw new Error('already_syncing');
     const state: SyncState = { status: 'syncing', phase: 'info' };
     this.active.set(site.id, state);
-    this.store.setStatus(site.id, 'syncing');
+    this.store.setStatus(site.id, 'syncing', { lastError: null });
     this.emit(site.id, state);
     void this.run(site);
   }
