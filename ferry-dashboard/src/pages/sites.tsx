@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, type Site, type SiteStatus } from '../api';
+import { api, ApiError, type Site, type SiteStatus } from '../api';
 import { AppLayout } from '../layout';
 
 const CHIP: Record<SiteStatus, { label: string; cls: string }> = {
@@ -38,10 +38,21 @@ function subline(site: Site): string {
 
 export function SitesPage() {
   const [sites, setSites] = useState<Site[] | null>(null);
+  const [loadError, setLoadError] = useState('');
   const navigate = useNavigate();
   useEffect(() => {
-    void api.get<Site[]>('/api/sites').then(setSites);
+    setLoadError('');
+    void api.get<Site[]>('/api/sites').then(setSites).catch((err) => {
+      setLoadError(err instanceof ApiError ? err.message : 'Failed to load your sites.');
+    });
   }, []);
+  if (loadError) {
+    return (
+      <AppLayout title="Sites">
+        <div className="form-error">{loadError}</div>
+      </AppLayout>
+    );
+  }
   if (sites === null) return <AppLayout title="Sites">{null}</AppLayout>;
 
   const headerRight = sites.length === 0

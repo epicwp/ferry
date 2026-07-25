@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, ApiError, type Site, type SyncState, type TestResult } from '../api';
 import { Stepper } from '../stepper';
 import { timeAgo } from './sites';
@@ -27,11 +27,13 @@ export function SyncPage() {
   const [test, setTest] = useState<TestResult | null>(null);
   const [testError, setTestError] = useState('');
   const [startError, setStartError] = useState('');
+  const [loadError, setLoadError] = useState('');
   const [copied, setCopied] = useState(false);
   const testedRef = useRef(false);
   const navigate = useNavigate();
 
   useEffect(() => {
+    setLoadError('');
     void api.get<Site>(`/api/sites/${id}`).then((s) => {
       setSite(s);
       if (s.status === 'paired' && !testedRef.current) {
@@ -40,6 +42,8 @@ export function SyncPage() {
           .then(setTest)
           .catch((err) => setTestError(err instanceof ApiError ? err.message : 'Connection test failed.'));
       }
+    }).catch((err) => {
+      setLoadError(err instanceof ApiError ? err.message : 'Failed to load the site.');
     });
   }, [id]);
 
@@ -49,6 +53,14 @@ export function SyncPage() {
     return () => es.close();
   }, [id]);
 
+  if (loadError) {
+    return (
+      <div className="page-center">
+        <div className="form-error">{loadError}</div>
+        <Link to="/" style={{ display: 'inline-block', marginTop: 12 }}>← Back to sites</Link>
+      </div>
+    );
+  }
   if (!site || !sync) return <div className="page-center" />;
 
   const start = async () => {

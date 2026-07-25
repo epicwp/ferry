@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client';
-import { createBrowserRouter, RouterProvider } from 'react-router-dom';
+import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom';
 import { RequireAuth } from './layout';
 import { AuthPage } from './pages/auth';
 import { SitesPage } from './pages/sites';
@@ -19,6 +19,7 @@ const router = createBrowserRouter([
       { path: '/sites/:id/install', element: <InstallPage /> },
       { path: '/sites/:id/pair', element: <PairPage /> },
       { path: '/sites/:id/sync', element: <SyncPage /> },
+      { path: '*', element: <Navigate to="/" replace /> },
     ],
   },
 ]);

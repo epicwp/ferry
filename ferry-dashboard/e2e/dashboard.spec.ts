@@ -65,6 +65,19 @@ test('a bad site id on the install page shows an error instead of a blank page',
   await expect(page.locator('.form-error')).toContainText('Site not found.');
 });
 
+test('a bad site id on the sync page shows an error instead of a blank page', async ({ page }) => {
+  await signUp(page);
+  await page.goto('/sites/999999/sync');
+  await expect(page.locator('.form-error')).toContainText('Site not found.');
+});
+
+test('an unknown route redirects to the sites list', async ({ page }) => {
+  await signUp(page);
+  await page.goto('/definitely-not-a-route');
+  await expect(page).toHaveURL('/');
+  await expect(page.getByRole('heading', { name: 'Sites' })).toBeVisible();
+});
+
 test('a failed pair shows an inline error and stays on the pairing screen', async ({ page }) => {
   await signUp(page);
   await page.getByRole('button', { name: 'New site' }).click();
