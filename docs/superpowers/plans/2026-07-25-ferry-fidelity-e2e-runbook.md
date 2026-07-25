@@ -180,14 +180,23 @@ Control (same conditions, a **not-yet-materialized** thumbnail): `404` (fallback
 
 **Testing-methodology note (not a product bug):** immediately after restoring the fallback script, one retry still 404'd. Root cause: DDEV's Mutagen host↔container file sync has a short lag, and the restoring `mv` was done from the host, racing the very next `curl`. Running `ddev mutagen sync` (flush) before retrying resolved it cleanly (`200`, `image/png`). This is an artifact of doing file swaps from the host side for the test, not of the fallback script itself.
 
-**Gate 3: PASS**, all checks including every carried-over extra verification item.
+**Gate 3: PASS** for what was actually evidenced: `curl` confirmed same-origin `content-type: font/woff2` for the materialized font (no cross-origin request needed); `ddev exec nginx -t` confirmed the named-location config was accepted; renaming the fallback script away and re-requesting confirmed the second request for each materialized file is served locally (static nginx response — etag/last-modified/accept-ranges present — not the PHP script). **Not exercised in this pass:** an actual browser-console CORS check (the spec's "page renders the font without CORS errors in the browser console" was approximated with `curl` content-type/origin checks, not a real page load with dev tools open) and range-request (`Range:` header) behavior on first materialization (no partial-content request was sent against a not-yet-materialized file).
 
 ## Gate 4 — fetch-uploads + full pull
 
 ```bash
 node dist/main.js fetch-uploads ferry-prod-ddev-site 2026/
 ```
-Observed: `✔ Materialized 3 file(s) (0.0 MB)`. Confirmed on disk: `2026/07/ferry-logo.png`, `2026/07/ferry-logo-150x63.png`, `2026/e2e-font.woff2`.
+Observed (original pass, before `fetchUploads` did any hash verification): `✔ Materialized 3 file(s) (0.0 MB)`. Confirmed on disk: `2026/07/ferry-logo.png`, `2026/07/ferry-logo-150x63.png`, `2026/e2e-font.woff2`.
+
+**Re-run against the live fixture after shipping hash verification** (`fetchUploads` now md5's every non-skipped, hash-bearing manifest entry against the written file and re-fetches mismatches once — see `ferry-cli/src/fetch-uploads.ts`). Fixture was already up (`ddev describe` on both `~/ferry-e2e/prod` and the clone showed `web`/`db` OK); rebuilt and re-ran the exact gate command:
+
+```bash
+export NODE_EXTRA_CA_CERTS="$(mkcert -CAROOT)/rootCA.pem"
+cd ferry-cli && npx tsc
+node dist/main.js fetch-uploads ferry-prod-ddev-site 2026/
+```
+Observed: `✔ Materialized 3 file(s) (0.0 MB)` — no `Skipped` line, i.e. all three hash-bearing/hash-null entries verified clean on the first pass (no retry needed). `diff -q` of all three files between `~/ferry-e2e/prod` and the clone confirmed byte-identical, backing the "hash-verified" claim with the shipped code rather than the pre-fix no-op.
 
 ```bash
 node dist/main.js pull ferry-prod-ddev-site --full
