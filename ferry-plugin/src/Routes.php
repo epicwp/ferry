@@ -211,13 +211,20 @@ final class Routes
         if (!in_array($table, $wpdb->get_col('SHOW TABLES'), true)) {
             return new \WP_Error('ferry_unknown_table', 'Unknown table.', ['status' => 404]);
         }
+        $skip = DbExcludes::parse($request->get_param('skip'));
+        $unknown = DbExcludes::unknown($skip);
+        if ($unknown !== []) {
+            return new \WP_Error('ferry_unknown_skip', 'Unknown skip rule(s): ' . implode(', ', $unknown) . '. The CLI is newer than this plugin - update the Ferry Connect plugin on the site.', ['status' => 400]);
+        }
         $after = max(0, (int) $request->get_param('after'));
         $before = $request->get_param('before') !== null ? (int) $request->get_param('before') : null;
-        $result = Db::export($wpdb, $table, Db::single_pk($wpdb, $table), $after, $before, new Budget());
+        $filter = DbExcludes::plan($table, $wpdb->prefix, $skip);
+        $result = Db::export($wpdb, $table, Db::single_pk($wpdb, $table), $after, $before, new Budget(), Db::CHUNK_ROWS, Db::BYTE_BUDGET, $filter);
         while (ob_get_level()) { ob_end_clean(); }
         header('Content-Type: application/gzip');
         header('X-Complete: ' . ($result['complete'] ? '1' : '0'));
         header('X-Last-Key: ' . $result['last_key']);
+        header('X-Ferry-Skip: ' . implode(',', $skip));
         echo gzencode($result['sql'], 6);
         exit;
     }
