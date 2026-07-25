@@ -56,7 +56,7 @@ program
     const result = await fetchUploads(site, { prefix, all: opts.all });
     console.log(`✔ Materialized ${result.fetched} file(s) (${(result.bytes / 1024 / 1024).toFixed(1)} MB)`);
     if (result.skipped.length > 0) {
-      console.log(`  Skipped ${result.skipped.length} (gone on production?): ${result.skipped.slice(0, 5).join(', ')}${result.skipped.length > 5 ? ', ...' : ''}`);
+      console.log(`  Skipped ${result.skipped.length} (gone on production, or failed hash verification): ${result.skipped.slice(0, 5).join(', ')}${result.skipped.length > 5 ? ', ...' : ''}`);
     }
   });
 

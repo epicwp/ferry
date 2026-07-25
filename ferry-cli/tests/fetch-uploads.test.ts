@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fetchUploads } from '../src/fetch-uploads.js';
-import { startMockPlugin, sizeOf, type MockPlugin } from './helpers/mockPlugin.js';
+import { startMockPlugin, sizeOf, hashOf, type MockPlugin } from './helpers/mockPlugin.js';
 
 describe('fetchUploads', () => {
   let home: string;
@@ -46,6 +46,31 @@ describe('fetchUploads', () => {
     expect(existsSync(join(clone, path))).toBe(true);
     expect(mock.requests.manifest[0].scope).toBe('uploads');
     expect(mock.requests.manifest[0].prefix).toBe('2026/');
+  });
+
+  it('hash-verifies fetched files, retries a mismatch once, and folds a still-bad file into skipped', async () => {
+    const goodPath = 'wp-content/uploads/2026/good.jpg';
+    const badPath = 'wp-content/uploads/2026/bad.jpg';
+    const noHashPath = 'wp-content/uploads/2026/nohash.jpg';
+    writeFileSync(join(fixture, 'wp-content', 'uploads', '2026', 'good.jpg'), 'good-bytes');
+    writeFileSync(join(fixture, 'wp-content', 'uploads', '2026', 'bad.jpg'), 'bad-bytes');
+    writeFileSync(join(fixture, 'wp-content', 'uploads', '2026', 'nohash.jpg'), 'nohash-bytes');
+    mock = await startMockPlugin(fixture, {
+      manifest: [
+        { path: goodPath, size: sizeOf(fixture, goodPath), hash: hashOf(fixture, goodPath) },
+        { path: badPath, size: sizeOf(fixture, badPath), hash: 'deadbeefdeadbeefdeadbeefdeadbeef' },
+        { path: noHashPath, size: sizeOf(fixture, noHashPath), hash: null },
+      ],
+    });
+    writeProfile(mock.base);
+    const result = await fetchUploads('demo', { prefix: '2026/' });
+
+    expect(result.skipped).toEqual([badPath]);
+    expect(result.fetched).toBe(2); // good (verified) + nohash (unverified) - bad excluded
+    expect(existsSync(join(clone, goodPath))).toBe(true);
+    expect(existsSync(join(clone, badPath))).toBe(true);
+    expect(existsSync(join(clone, noHashPath))).toBe(true);
+    expect(mock.requests.files[mock.requests.files.length - 1]).toEqual([badPath]);
   });
 
   it('requires a prefix or --all', async () => {
