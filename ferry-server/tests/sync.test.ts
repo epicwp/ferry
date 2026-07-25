@@ -80,6 +80,60 @@ describe('SyncManager', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(seen.at(-1)!.status).toBe('ready');
   });
+
+  it('isolates throwing subscribers and ensures other subscribers receive final state', async () => {
+    const done = deferred<PullResult>();
+    let emit: ((e: PullProgress) => void) | undefined;
+    const { store, user, site, sync } = setup({
+      pull: async (_slug, opts) => { emit = opts.onProgress; return done.promise; },
+      verifyClone: async () => true,
+    });
+    const throwingSeen: SyncState[] = [];
+    const goodSeen: SyncState[] = [];
+    // Subscribe with a listener that throws
+    sync.subscribe(site, (s) => {
+      throwingSeen.push(s);
+      throw new Error('Subscriber callback failed');
+    });
+    // Subscribe with a normal listener
+    sync.subscribe(site, (s) => {
+      goodSeen.push(s);
+    });
+    sync.start(site);
+    emit!({ phase: 'files', current: 1, total: 2 });
+    done.resolve(RESULT);
+    await new Promise((r) => setTimeout(r, 20));
+    // Verify sync completed successfully despite throwing subscriber
+    expect(store.siteFor(user.id, site.id)!.status).toBe('ready');
+    // Verify both subscribers got the initial and final states
+    expect(throwingSeen.at(-1)!.status).toBe('ready');
+    expect(goodSeen.at(-1)!.status).toBe('ready');
+    // Verify throwing subscriber didn't prevent good subscriber from receiving updates
+    expect(goodSeen.length).toBeGreaterThan(1);
+  });
+
+  it('handles subscriber errors without unhandled promise rejections', async () => {
+    const done = deferred<PullResult>();
+    const { store, user, site, sync } = setup({
+      pull: async () => done.promise,
+      verifyClone: async () => true,
+    });
+    let callCount = 0;
+    const unsubscribe = sync.subscribe(site, () => {
+      callCount++;
+      throw new Error('Listener error');
+    });
+    sync.start(site);
+    done.resolve(RESULT);
+    // Give the sync time to complete and emit states
+    await new Promise((r) => setTimeout(r, 20));
+    // Verify the listener was called multiple times despite throwing
+    expect(callCount).toBeGreaterThan(0);
+    // Verify sync reached ready despite listener throwing (refresh site from store)
+    const refreshed = store.siteFor(user.id, site.id)!;
+    expect(refreshed.status).toBe('ready');
+    unsubscribe();
+  });
 });
 
 describe('sync routes', () => {

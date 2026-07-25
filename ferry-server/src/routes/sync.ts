@@ -11,8 +11,11 @@ export function syncRoutes(app: FastifyInstance, deps: AppDeps, sync: SyncManage
     }
     try {
       sync.start(site);
-    } catch {
-      return reply.code(409).send({ error: 'A sync is already running for this site.' });
+    } catch (err) {
+      if (err instanceof Error && err.message === 'already_syncing') {
+        return reply.code(409).send({ error: 'A sync is already running for this site.' });
+      }
+      throw err;
     }
     return reply.code(202).send({ started: true });
   });

@@ -53,7 +53,12 @@ export class SyncManager {
   }
 
   subscribe(site: Site, fn: Listener): () => void {
-    fn(this.snapshot(site));
+    try {
+      fn(this.snapshot(site));
+    } catch (err) {
+      // Swallow initial call error to prevent broken subscribers from preventing subscription.
+      console.error('SSE listener error:', err);
+    }
     let set = this.listeners.get(site.id);
     if (!set) {
       set = new Set();
@@ -89,6 +94,13 @@ export class SyncManager {
   }
 
   private emit(siteId: number, state: SyncState): void {
-    for (const fn of this.listeners.get(siteId) ?? []) fn(state);
+    for (const fn of this.listeners.get(siteId) ?? []) {
+      try {
+        fn(state);
+      } catch (err) {
+        // Swallow listener errors to prevent broken subscribers from affecting sync outcome or crashing the process.
+        console.error('SSE listener error:', err);
+      }
+    }
   }
 }
