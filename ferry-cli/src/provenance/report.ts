@@ -76,7 +76,7 @@ export function summarize(report: ProvenanceReport): string {
   const pkgModified = report.verified.filter((p) => p.type !== 'core').reduce((n, p) => n + p.modified.length, 0);
   const parts: string[] = [];
   if (core && core.modified.length > 0) parts.push(`${core.modified.length} modified core file(s)`);
-  if (core && core.extra.length > 0) parts.push(`${core.extra.length} unexpected file(s) in wp-admin//wp-includes/`);
+  if (core && core.extra.length > 0) parts.push(`${core.extra.length} unexpected file(s) in wp-admin/ or wp-includes/`);
   if (core && core.missing.length > 0) parts.push(`${core.missing.length} missing core file(s)`);
   if (pkgModified > 0) parts.push(`${pkgModified} modified plugin/theme file(s)`);
   return parts.length === 0 ? 'core and wp.org packages verified clean' : `⚠ ${parts.join(', ')}`;

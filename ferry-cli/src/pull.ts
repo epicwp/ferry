@@ -88,8 +88,8 @@ export async function pull(slug: string, deps: PullDeps = {}): Promise<PullResul
       reportPath,
       summary: summarize(report),
       reused: plan.reuse.length,
-      reconstructed: plan.reconstruct.length,
-      fetched: plan.fetch.length,
+      reconstructed: plan.reconstruct.length - rec.failed.length,
+      fetched: plan.fetch.length + rec.failed.length,
     },
   };
 }

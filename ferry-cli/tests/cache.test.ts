@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -80,6 +80,27 @@ describe('cache', () => {
     mock = await startMockWporg({});
     expect(await ensurePackage(cacheDir, { type: 'plugin', slug: 'nope', version: '1.0' }, mock.endpoints)).toBeNull();
     expect(await ensurePackage(cacheDir, { type: 'core', slug: 'core', version: '9.9.9', locale: 'en_US' }, mock.endpoints)).toBeNull();
+  });
+
+  it('self-heals a corrupt checksums.json: drops the package and re-ingests', async () => {
+    mock = await startMockWporg({ zips: { '/plugin/akismet.5.3.7.zip': zipOf('akismet', { 'akismet.php': '<?php // a' }) } });
+    const ref: PackageRef = { type: 'plugin', slug: 'akismet', version: '5.3.7' };
+    const dir = packageDir(cacheDir, ref);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'checksums.json'), '{{{ not json');
+    const pkg = await ensurePackage(cacheDir, ref, mock.endpoints);
+    expect(pkg).not.toBeNull();
+    expect(pkg!.checksums['akismet.php']).toBe(md5('<?php // a'));
+    expect(() => JSON.parse(readFileSync(join(dir, 'checksums.json'), 'utf8'))).not.toThrow();
+  });
+
+  it('returns null instead of throwing when a corrupt cache cannot be re-ingested (wp.org unreachable)', async () => {
+    const ref: PackageRef = { type: 'plugin', slug: 'akismet', version: '5.3.7' };
+    const dir = packageDir(cacheDir, ref);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'checksums.json'), '{{{ not json');
+    const dead = { api: 'http://127.0.0.1:1', downloads: 'http://127.0.0.1:1' };
+    await expect(ensurePackage(cacheDir, ref, dead)).resolves.toBeNull();
   });
 
   it('cleanTmp removes only stale tmp dirs', () => {

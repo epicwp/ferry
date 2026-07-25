@@ -42,7 +42,12 @@ function load(dir: string, ref: PackageRef): CachedPackage {
 export async function ensurePackage(cacheDir: string, ref: PackageRef, ep: WporgEndpoints): Promise<CachedPackage | null> {
   const dir = packageDir(cacheDir, ref);
   if (existsSync(join(dir, 'checksums.json'))) {
-    return load(dir, ref);
+    try {
+      return load(dir, ref);
+    } catch {
+      // self-heal: corrupt cache metadata must never fail a pull - drop it and re-ingest
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 
   let official: Record<string, string> | null = null;
@@ -93,14 +98,24 @@ export async function ensurePackage(cacheDir: string, ref: PackageRef, ep: Wporg
     rmSync(tmp, { recursive: true, force: true });
     if (!existsSync(join(dir, 'checksums.json'))) return null; // lost a race AND the winner vanished - give up
   }
-  return load(dir, ref);
+  try {
+    return load(dir, ref);
+  } catch {
+    return null; // just-written copy is corrupt - give up gracefully rather than throw
+  }
 }
 
 /** Opportunistic cleanup of interrupted ingests; >24h so a concurrent pull's live tmp survives. */
 export function cleanTmp(cacheDir: string): void {
   const tmp = join(cacheDir, 'tmp');
   if (!existsSync(tmp)) return;
-  for (const name of readdirSync(tmp)) {
+  let names: string[];
+  try {
+    names = readdirSync(tmp);
+  } catch {
+    return; // a concurrent pull may have removed tmp/ between existsSync and readdir - fine
+  }
+  for (const name of names) {
     const p = join(tmp, name);
     try {
       if (Date.now() - statSync(p).mtimeMs > 24 * 3600 * 1000) {

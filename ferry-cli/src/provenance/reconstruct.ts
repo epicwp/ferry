@@ -1,5 +1,5 @@
 import { constants, promises as fsp } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, resolve, sep } from 'node:path';
 import pLimit from 'p-limit';
 import { md5File } from './md5.js';
 
