@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, renameSync } from 'node:fs';
+import { existsSync, renameSync, rmSync } from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 import type { SiteInfo } from './profile.js';
@@ -20,7 +20,7 @@ const SALT_KEYS = [
   'AUTH_SALT', 'SECURE_AUTH_SALT', 'LOGGED_IN_SALT', 'NONCE_SALT',
 ];
 
-const DROP_INS = ['object-cache.php', 'advanced-cache.php', 'db.php', 'sunrise.php'];
+export const DROP_INS = ['object-cache.php', 'advanced-cache.php', 'db.php', 'sunrise.php'];
 
 export function phpScalar(v: unknown): string | null {
   if (v === null) return 'null';
@@ -136,7 +136,8 @@ export function neutralizeDropIns(docroot: string): string[] {
   for (const dropIn of DROP_INS) {
     const path = join(docroot, 'wp-content', dropIn);
     const disabled = `${path}.ferry-disabled`;
-    if (existsSync(path) && !existsSync(disabled)) {
+    if (existsSync(path)) {
+      if (existsSync(disabled)) rmSync(disabled); // stale from a prior pull: fresh wins
       renameSync(path, disabled);
       renamed.push(dropIn);
     }

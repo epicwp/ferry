@@ -59,3 +59,28 @@ Rebuild the fixture and re-run from the commands above; teardown:
 ddev stop --unlist ferry-prod-ddev-site && rm -rf ~/ferry-sites/ferry-prod-ddev-site
 ddev stop --unlist ferry-prod && rm -rf ~/ferry-e2e
 ```
+
+---
+
+# Plan 2 — Git substrate (2026-07-24)
+
+**Result:** ✅ **all checks pass** against the real DDEV `ferry-prod` fixture.
+
+Fixture prep: seeded a bundled plugin repo `wp-content/plugins/demo/.git` (+ `plugin.php`) on `ferry-prod` to exercise nested-`.git` neutralization; cleared the clone for a clean first pull; ran `ferry pull ferry-prod-ddev-site` with the git-substrate CLI (`export NODE_EXTRA_CA_CERTS="$(mkcert -CAROOT)/rootCA.pem"`).
+
+CLI printed: `Committed production snapshot 9d0785e (1 nested repo(s) neutralized)`.
+
+| Check | Result |
+|---|---|
+| Pull commits to `production` (subject "ferry: production snapshot", HEAD on production) | ✅ |
+| Ferry artifacts not tracked; `check-ignore` covers wp-config.php, wp-config-ddev.php, CLAUDE.md, .ddev/, uploads, ferry-overlay.php | ✅ |
+| Bundled `demo/.git` → `demo/.git.ferry-disabled` (no stray `.git`); its metadata tracked | ✅ |
+| Bundled `demo/plugin.php` IS tracked (not hidden as a submodule) | ✅ |
+| `CLAUDE.md` auto-placed in the clone root | ✅ |
+| From a `work` branch, `git diff production` shows exactly `index.php` and nothing else | ✅ |
+| Clone still serves HTTP 200 (git step didn't disturb the working clone) | ✅ |
+| **Re-pull:** second `production` commit (count=2), nested repo re-neutralized idempotently, ferry repo's own `.git` intact (sentinel present), status clean | ✅ |
+
+No bugs found — the git substrate worked end-to-end on the first run, first and second pulls alike.
+
+Teardown (optional): `rm -rf ~/ferry-e2e/prod/wp-content/plugins/demo` to remove the seeded bundled repo.

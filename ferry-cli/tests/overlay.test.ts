@@ -117,6 +117,16 @@ describe('filesystem phases', () => {
     expect(neutralizeDropIns(docroot)).toEqual([]); // second run: nothing left to do
   });
 
+  it('neutralizeDropIns replaces a stale .ferry-disabled with a re-transferred active drop-in on re-pull', () => {
+    writeFileSync(join(docroot, 'wp-content/object-cache.php'), '<?php // fresh redis');
+    writeFileSync(join(docroot, 'wp-content/object-cache.php.ferry-disabled'), '<?php // stale');
+    const renamed = neutralizeDropIns(docroot);
+    expect(existsSync(join(docroot, 'wp-content/object-cache.php'))).toBe(false);
+    expect(existsSync(join(docroot, 'wp-content/object-cache.php.ferry-disabled'))).toBe(true);
+    expect(readFileSync(join(docroot, 'wp-content/object-cache.php.ferry-disabled'), 'utf8')).toBe('<?php // fresh redis');
+    expect(renamed).toContain('object-cache.php');
+  });
+
   it('finalizeClone prepends the htaccess fallback on apache and preserves pulled rules', async () => {
     writeFileSync(join(docroot, '.htaccess'), '# BEGIN WordPress\n');
     await finalizeClone(docroot, info({ server: 'apache' }));
