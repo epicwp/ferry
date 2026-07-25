@@ -28,6 +28,17 @@ final class Manifest
             if (!is_dir($root . '/' . $base)) {
                 return ['files' => [], 'next' => $after, 'complete' => true];
             }
+            // A prefix whose last segment is a symlink (e.g. .../uploads/2026 ->
+            // /outside) still passes is_dir() above; realpath-contain it against
+            // the uploads root so scope=uploads can't leak metadata from outside
+            // the site (same pattern as Routes::files()'s containment check).
+            $uploads_root = realpath($root . '/wp-content/uploads');
+            $resolved_base = realpath($root . '/' . $base);
+            $contained = $uploads_root !== false && $resolved_base !== false
+                && ($resolved_base === $uploads_root || strpos($resolved_base, $uploads_root . DIRECTORY_SEPARATOR) === 0);
+            if (!$contained) {
+                return ['files' => [], 'next' => $after, 'complete' => true];
+            }
         }
         foreach (self::walk($root, $base, $allow_uploads) as $entry) {
             if ($index++ < $after) {

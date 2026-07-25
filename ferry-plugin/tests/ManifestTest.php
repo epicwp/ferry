@@ -105,4 +105,17 @@ final class ManifestTest extends TestCase
         $r = Manifest::batch($this->root, 0, new Budget(10.0));
         $this->assertNotContains('wp-content/uploads/2026/a.jpg', array_column($r['files'], 'path'));
     }
+
+    public function test_uploads_scope_rejects_prefix_symlink_escape(): void
+    {
+        $outside = sys_get_temp_dir() . '/ferry-outside-' . uniqid();
+        mkdir($outside, 0777, true);
+        file_put_contents($outside . '/secret.txt', 'leaked');
+        symlink($outside, $this->root . '/wp-content/uploads/linked');
+        $r = Manifest::batch($this->root, 0, new Budget(10.0), 5000, 'uploads', 'linked/');
+        $this->assertSame([], $r['files']);
+        $this->assertTrue($r['complete']);
+        unlink($this->root . '/wp-content/uploads/linked');
+        exec('rm -rf ' . escapeshellarg($outside));
+    }
 }
