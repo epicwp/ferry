@@ -50,3 +50,16 @@ test('a bad site id on the install page shows an error instead of a blank page',
   await page.goto('/sites/999999/install');
   await expect(page.locator('.form-error')).toContainText('Site not found.');
 });
+
+test('a failed pair shows an inline error and stays on the pairing screen', async ({ page }) => {
+  await signUp(page);
+  await page.getByRole('button', { name: 'New site' }).click();
+  await page.getByLabel('Name').fill('Unreachable');
+  await page.getByLabel('Site URL').fill('https://127.0.0.1:9');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await page.getByRole('button', { name: /I have a code/ }).click();
+  await page.getByPlaceholder('XXXX-XXXX').fill('AAAA-BBBB');
+  await page.getByRole('button', { name: 'Connect' }).click();
+  await expect(page.locator('.form-error')).toBeVisible();
+  await expect(page).toHaveURL(/\/pair$/);
+});

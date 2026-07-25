@@ -152,3 +152,15 @@ a:hover { color: oklch(0.44 0.16 262); }
 .zip-button__title { font-weight: 500; font-size: 13px; color: var(--accent-ink); }
 .zip-button__sub { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-top: 2px; }
 .form-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+.pair-panel { width: 100%; max-width: 560px; text-align: center; }
+.pair-panel__step { font-size: 12px; color: var(--faint); margin-bottom: 10px; }
+.pair-panel h1 { font-size: 22px; letter-spacing: -0.02em; margin-bottom: 6px; }
+.pair-panel p { color: var(--muted); font-size: 13.5px; margin-bottom: 28px; }
+.pair-panel__code {
+  height: 66px; max-width: 320px; margin: 0 auto 20px; display: block;
+  font-size: 28px; font-weight: 600; text-align: center; letter-spacing: 0.35em;
+  border: 1.5px solid var(--accent); border-radius: 11px;
+}
+.pair-panel__code::placeholder { color: var(--faint); letter-spacing: 0.35em; }
+.pair-panel__refused { text-align: left; }
+.pair-panel__back { margin-top: 24px; font-size: 12.5px; }
