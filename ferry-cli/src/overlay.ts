@@ -105,27 +105,25 @@ add_filter('pre_http_request', function ($pre, $args, $url) {
 }
 
 /**
- * §2.8: solve uploads on the HTTP level - local if present, 302 to production if not.
- * `^~` makes this a preferential prefix match: when it matches, nginx skips regex
- * locations entirely. Without it, DDEV's `location ~* \.(png|jpg|...)$` static-media
- * handler matches an uploaded image first and 404s it before this fallback runs.
+ * §2.8 v0.2: missing uploads route to the materializing fallback script.
+ * `^~` keeps DDEV's static-media regex location from 404ing uploads first.
  */
-export function generateNginxFallback(prodOrigin: string): string {
+export function generateNginxFallback(): string {
   return `location ^~ /wp-content/uploads/ {
-    try_files $uri @ferry_origin;
+    try_files $uri @ferry_fallback;
 }
-location @ferry_origin {
-    return 302 ${prodOrigin}$request_uri;
+location @ferry_fallback {
+    rewrite ^/wp-content/uploads/(.*)$ /ferry-uploads-fallback.php?path=$1 last;
 }
 `;
 }
 
-export function generateHtaccessFallback(prodOrigin: string): string {
+export function generateHtaccessFallback(): string {
   return `# BEGIN ferry-uploads-fallback
 <IfModule mod_rewrite.c>
 RewriteEngine On
 RewriteCond %{REQUEST_FILENAME} !-f
-RewriteRule ^wp-content/uploads/(.*)$ ${prodOrigin}/wp-content/uploads/$1 [R=302,L]
+RewriteRule ^wp-content/uploads/(.*)$ /ferry-uploads-fallback.php?path=$1 [QSA,L]
 </IfModule>
 # END ferry-uploads-fallback
 `;
@@ -138,9 +136,11 @@ export async function applyOverlay(docroot: string, info: SiteInfo, localUrl: st
   await fsp.writeFile(join(docroot, 'wp-content', 'mu-plugins', 'ferry-overlay.php'), generateMuPlugin());
   await fsp.copyFile(assetPath('ferry-stubs.php'), join(docroot, 'wp-content', 'mu-plugins', 'ferry-stubs.php'));
   await fsp.mkdir(join(docroot, '.ddev', 'nginx'), { recursive: true });
+  await fsp.writeFile(join(docroot, '.ddev', 'nginx', 'ferry-uploads.conf'), generateNginxFallback());
+  const fallback = await fsp.readFile(assetPath('ferry-uploads-fallback.php'), 'utf8');
   await fsp.writeFile(
-    join(docroot, '.ddev', 'nginx', 'ferry-uploads.conf'),
-    generateNginxFallback(new URL(info.siteurl).origin),
+    join(docroot, 'ferry-uploads-fallback.php'),
+    fallback.replace("'__FERRY_PROD_ORIGIN__'", phpScalar(new URL(info.siteurl).origin) as string),
   );
 }
 
@@ -168,7 +168,7 @@ export async function finalizeClone(docroot: string, info: SiteInfo): Promise<st
     if (!existing.includes('# BEGIN ferry-uploads-fallback')) {
       await fsp.writeFile(
         htaccessPath,
-        generateHtaccessFallback(new URL(info.siteurl).origin) + existing,
+        generateHtaccessFallback() + existing,
       );
     }
   }

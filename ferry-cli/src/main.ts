@@ -34,7 +34,7 @@ program
         ? `  Lite DB pull: skipped ${result.liteSkip.join(', ')} (use --full for everything)`
         : '  Full DB pull: no exclusions',
     );
-    console.log('  Media is not cloned - missing uploads fall back to production (302).');
+    console.log('  Media is not cloned upfront - missing uploads materialize from production on first request (ferry fetch-uploads for bulk).');
     console.log(
       `  Committed production snapshot ${result.commit.slice(0, 7)}` +
         (result.neutralizedRepos > 0 ? ` (${result.neutralizedRepos} nested repo(s) neutralized)` : ''),
