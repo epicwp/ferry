@@ -2,7 +2,7 @@
 
 **Date:** July 25, 2026
 **Branch:** `feat/fidelity-slice`
-**Result:** ⚠️ **3 of 4 gates pass clean; Gate 2 finds a real product defect** (WooCommerce's stock "Extensions" admin page fatals under the generic license stub). Gates 1, 3, 4 pass with no code changes needed.
+**Result:** ✅ **all four gates pass.** Gate 2 initially found a real product defect (WooCommerce's stock "Extensions" admin page fataled under the generic license stub); fixed in `ferry-cli/assets/ferry-stubs.php` and re-verified end-to-end below. Gates 1, 3, 4 passed clean with no code changes needed.
 
 ## Environment
 
@@ -106,7 +106,7 @@ GET /wp-admin/ → 200
 ```
 ✅ green notice confirmed.
 
-**WooCommerce → Extensions** (`GET /wp-admin/admin.php?page=wc-addons`):
+**WooCommerce → Extensions** (`GET /wp-admin/admin.php?page=wc-addons`) — first run, **before the fix**:
 ```
 HTTP 200 (headers already flushed before the fatal)
 <b>Fatal error</b>: Uncaught TypeError: array_map(): Argument #2 ($array) must be of type array, stdClass given
@@ -116,9 +116,21 @@ Stack trace:
 #1 class-wc-admin-addons.php(404)…: WC_Admin_Menus->addons_page()
 ...
 ```
-❌ **fatals.** See "Bug found" below — this is a genuine defect in the fidelity-slice's stub code, not fixed here per instructions (diagnose and report, don't hot-fix).
+❌ **fataled.** Root cause and fix are in "Bug found & fixed" below. The fix was applied in `ferry-cli/assets/ferry-stubs.php`, re-delivered to the clone via a fresh `node dist/main.js pull ferry-prod-ddev-site` (commit `3521414`), and re-verified end-to-end:
 
-**Negative control** (brief's Step 4, extra item):
+```
+GET /wp-admin/admin.php?page=wc-addons  → 302 → /wp-admin/admin.php?page=wc-admin&path=%2Fextensions → 200
+  <title>Extensions ‹ WooCommerce ‹ Ferry Fixture</title>
+  0 occurrences of "fatal error" / "critical error" in the response body
+```
+`ddev logs -s web` (a real php-fpm request this time, unlike the wp-cli eval calls above) shows the new stub case firing:
+```
+NOTICE: PHP message: [ferry-harness] stubbed: https://woocommerce.com/wp-json/wccom-extensions/1.0/categories?locale=en_US
+NOTICE: PHP message: [ferry-harness] stubbed: https://woocommerce.com/wp-json/helper/1.0/product-usage-notice-rules
+```
+✅ **fixed, re-verified — no fatal, no other endpoint on the page needed a shape change.**
+
+**Negative control** (brief's Step 4, extra item) — re-run against the fixed stub, after the fresh pull:
 ```bash
 mv wp-content/mu-plugins/ferry-stubs.php wp-content/mu-plugins/ferry-stubs.php.disabled
 ddev wp eval "require_once …/wc-admin-functions.php; do_action('admin_init');"   # exit 0
@@ -129,7 +141,7 @@ ddev wp option get ferry_demo_license_status                                    
 ```
 `ferry-harness` log lines confirmed the mechanism: `blocked outbound HTTP: https://ferry-prod-ddev-site.ddev.site/` while the stub was disabled, `stubbed: https://ferry-prod-ddev-site.ddev.site/` after restoring it.
 
-**Gate 2: valid/invalid flip and negative control PASS. The WooCommerce Extensions sub-check FAILS — see bug report below.**
+**Gate 2: PASS — valid/invalid flip, negative control, green admin notice, and WooCommerce Extensions (post-fix) all confirmed.**
 
 ## Gate 3 — uploads materialization
 
@@ -197,11 +209,11 @@ curl -kso /dev/null -w '%{http_code}\n' https://ferry-prod-ddev-site.ddev.site/ 
 
 **Gate 4: PASS.**
 
-## Bug found: WooCommerce's stock "Extensions" page fatals under the generic WC.com stub
+## Bug found & fixed: WooCommerce's stock "Extensions" page fataled under the generic WC.com stub
 
-**Not fixed here** — diagnosed and reported per the task's instructions (a code defect in the slice, not an environment issue).
+Found during Gate 2, diagnosed, and — once confirmed as a genuine code defect rather than an environment issue — fixed and re-verified in the same E2E pass (commit `8c651fb`).
 
-**Where:** `ferry-cli/assets/ferry-stubs.php`, `ferry_stub_woocommerce()`:
+**Where:** `ferry-cli/assets/ferry-stubs.php`, `ferry_stub_woocommerce()`, before the fix:
 ```php
 function ferry_stub_woocommerce($url)
 {
@@ -224,11 +236,29 @@ $allowed_sections = array_map(fn($section_object) => $section_object->slug, $sec
 ```
 `GET https://woocommerce.com/wp-json/wccom-extensions/1.0/categories` doesn't match the `/subscriptions` special case, so the stub falls through to the default `{}` (empty-object) shape. `json_decode('{}')` yields a `stdClass`, not an array, and `array_map()`'s second argument must be an array — **uncaught `TypeError`**, caught by WordPress's fatal-error handler, rendering as a "critical error" page (still HTTP 200, since headers were already flushed).
 
-**Reproduction:** any DDEV clone with WooCommerce active; visit **WooCommerce → Extensions** in wp-admin. 100% reproducible, confirmed via authenticated `curl` above with the full stack trace.
+**Reproduction:** any DDEV clone with WooCommerce active; visit **WooCommerce → Extensions** in wp-admin. Was 100% reproducible, confirmed via authenticated `curl` with the full stack trace.
 
-**Root cause, one level up:** the stub's default fallback assumes every non-`/subscriptions` WooCommerce.com endpoint is content with an empty *object* response. That's wrong for at least this one real, common endpoint, which needs an empty *array* (`[]`) to be handled gracefully by WooCommerce's own code (`array_map` over zero categories is a legitimate, well-formed "no data" case). No existing test (`ferry-plugin/tests/`, `ferry-cli/tests/`) covers `ferry_stub_woocommerce()` at all — this path was untested.
+**Root cause, one level up:** the stub's default fallback assumes every non-`/subscriptions` WooCommerce.com endpoint is content with an empty *object* response. That was wrong for at least this one real, common endpoint, which needs an empty *array* (`[]`) to be handled gracefully by WooCommerce's own code (`array_map` over zero categories is a legitimate, well-formed "no data" case). No existing test (`ferry-plugin/tests/`, `ferry-cli/tests/`) covered `ferry_stub_woocommerce()` at all — this path was untested before this gate.
 
-**Suggested direction (not implemented):** special-case the `wccom-extensions` categories path (and any other WC.com endpoint whose real payload shape is an array) to return `'[]'` like `/subscriptions` does, rather than defaulting every unmatched path to `{}`. Whoever picks this up should audit which other stock WooCommerce admin pages call `ferry_stub_woocommerce()`-routed endpoints and confirm their expected shapes before generalizing further.
+**Fix applied** (`ferry-cli/assets/ferry-stubs.php`, commit `8c651fb`):
+```php
+function ferry_stub_woocommerce($url)
+{
+    $path = (string) parse_url($url, PHP_URL_PATH);
+    if (substr($path, -14) === '/subscriptions') {
+        return ferry_stub_http_200('[]');
+    }
+    // WC_Admin_Addons::get_sections() array_maps over this response - must be a
+    // list, not the generic {} shape, or WooCommerce's own Extensions page fatals.
+    if (strpos($path, '/wccom-extensions/') !== false && substr($path, -11) === '/categories') {
+        return ferry_stub_http_200('[]');
+    }
+    return ferry_stub_http_200(new stdClass());
+}
+```
+Special-cases the `wccom-extensions/.../categories` path to `'[]'`, same pattern as `/subscriptions`; every other WC.com path (confirmed on this page: `.../helper/1.0/product-usage-notice-rules`) keeps the `{}` default and rendered fine. Covered by a new `StubsTest::test_woocommerce_extensions_categories_is_a_list()` (`ferry-plugin/tests/StubsTest.php`) asserting the categories path returns `'[]'` and an unrelated `wccom-extensions` path still returns `'{}'`. Iterating "load the page, extend the stub for the next endpoint that fatals" per the fix instructions took exactly one round — no further endpoint on the Extensions page needed a shape change (confirmed by the clean re-verification above, following the page's own redirect through to the React marketplace shell with zero fatal/critical-error occurrences).
+
+**Test evidence:** `php -l ferry-cli/assets/ferry-stubs.php` → clean. `cd ferry-plugin && vendor/bin/phpunit` → **91 tests, 191 assertions, OK** (one new `StubsTest` case added). `cd ferry-cli && npx vitest run` → **18 files, 91 tests, all passed** (unaffected — the CLI test asserting the copied stub only checks for the `ferry_stub_response` function name substring). `npx tsc --noEmit` → clean (no `.ts` files touched).
 
 ## Reproduce / teardown
 
