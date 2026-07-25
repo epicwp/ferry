@@ -10,6 +10,8 @@ export function InstallPage() {
   const [error, setError] = useState('');
   const navigate = useNavigate();
   useEffect(() => {
+    setError('');
+    setSite(null);
     void api.get<Site>(`/api/sites/${id}`).then(setSite).catch((err) => {
       setError(err instanceof ApiError ? err.message : 'Failed to load the site.');
     });
