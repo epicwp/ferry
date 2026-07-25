@@ -1,0 +1,41 @@
+{
+  "secret": "ferry-test-secret-0123456789abcdef",
+  "vectors": [
+    {
+      "name": "get-manifest",
+      "method": "GET",
+      "route": "/ferry/v1/manifest",
+      "query": { "after": "0" },
+      "body": "",
+      "timestamp": 1753351200,
+      "expected": "49932caecd43868dbecc742a2c7f0c6035af201a1359137b0c2743ccc8063d9f"
+    },
+    {
+      "name": "post-files",
+      "method": "POST",
+      "route": "/ferry/v1/files",
+      "query": {},
+      "body": "{\"paths\":[\"wp-load.php\"]}",
+      "timestamp": 1753351260,
+      "expected": "3b150e5ba131fd206d9f59207a245886bf64ceb6c9ec962799e72c7e861c64ec"
+    },
+    {
+      "name": "get-db-sorted-query",
+      "method": "GET",
+      "route": "/ferry/v1/db",
+      "query": { "table": "wp_posts", "after": "0", "before": "4210" },
+      "body": "",
+      "timestamp": 1753351320,
+      "expected": "116e6aee9032361b14b1be1ed2590021080fa68b639f167d1eef1449b7039c69"
+    },
+    {
+      "name": "rfc3986-encoding-edge",
+      "method": "GET",
+      "route": "/ferry/v1/files",
+      "query": { "path": "wp-content/themes/x y/f'(1)!.php" },
+      "body": "",
+      "timestamp": 1753351380,
+      "expected": "62a218d9e3bd0362901f92c1c87b372f26f17711dc5a839e2ee518b9a5120e28"
+    }
+  ]
+}
