@@ -1,7 +1,7 @@
 import { promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 import { FerryClient, type ManifestEntry } from './client.js';
-import { pullDatabase } from './db.js';
+import { LITE_SKIP, pullDatabase } from './db.js';
 import { DdevEnv, type CloneEnv } from './env/ddev.js';
 import { applyOverlay, finalizeClone } from './overlay.js';
 import { ferryHome, loadProfile, saveProfile, type SiteInfo } from './profile.js';
@@ -11,9 +11,11 @@ import { reconstruct } from './provenance/reconstruct.js';
 import { buildReport, summarize, writeReport } from './provenance/report.js';
 import type { WporgEndpoints } from './provenance/wporg.js';
 import { commitProduction, ensureRepo, neutralizeNestedGit, writeClaudeMd, writeGitignore } from './git.js';
-import { fetchAll } from './transfer.js';
+import { fetchAll, fetchManifest } from './transfer.js';
 
 export interface PullDeps { env?: CloneEnv; wporg?: WporgEndpoints; cacheDir?: string }
+
+export interface PullOpts { full?: boolean }
 
 export interface PullResult {
   url: string;
@@ -22,11 +24,12 @@ export interface PullResult {
   skipped: string[];
   commit: string;
   neutralizedRepos: number;
+  liteSkip: string[];
   provenance: { reportPath: string; summary: string; reused: number; reconstructed: number; fetched: number };
 }
 
 /** The §4.6 flow. DDEV provisioning starts early and is awaited late ("join"). */
-export async function pull(slug: string, deps: PullDeps = {}): Promise<PullResult> {
+export async function pull(slug: string, deps: PullDeps = {}, opts: PullOpts = {}): Promise<PullResult> {
   const env = deps.env ?? new DdevEnv();
   const profile = loadProfile(slug);
   const client = new FerryClient(profile.url, profile.secret);
@@ -72,7 +75,8 @@ export async function pull(slug: string, deps: PullDeps = {}): Promise<PullResul
   await writeClaudeMd(docroot);
   const commit = await commitProduction(docroot, manifest.map((e) => e.path), 'ferry: production snapshot');
 
-  const dump = await pullDatabase(client, join(ferryHome(), 'sites', slug, 'db-dump'));
+  const liteSkip = opts.full ? [] : LITE_SKIP;
+  const dump = await pullDatabase(client, join(ferryHome(), 'sites', slug, 'db-dump'), liteSkip);
 
   await envReady;                                         // join (§4.6)
   await env.importDb(docroot, dump);
@@ -84,6 +88,7 @@ export async function pull(slug: string, deps: PullDeps = {}): Promise<PullResul
     skipped,
     commit,
     neutralizedRepos: neutralized.length,
+    liteSkip,
     provenance: {
       reportPath,
       summary: summarize(report),
@@ -92,21 +97,4 @@ export async function pull(slug: string, deps: PullDeps = {}): Promise<PullResul
       fetched: plan.fetch.length + rec.failed.length,
     },
   };
-}
-
-async function fetchManifest(client: FerryClient): Promise<ManifestEntry[]> {
-  const entries: ManifestEntry[] = [];
-  let after = 0;
-  for (;;) {
-    const { data, headers } = await client.getJson('/ferry/v1/manifest', { after: String(after) });
-    entries.push(...(data.files as ManifestEntry[]));
-    if (headers['x-complete'] === '1') {
-      return entries;
-    }
-    const next = Number(headers['x-next-index']);
-    if (!Number.isFinite(next) || next <= after) {
-      throw new Error('manifest made no progress - aborting');
-    }
-    after = next;
-  }
 }

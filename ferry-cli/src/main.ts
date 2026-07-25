@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import { fetchUploads } from './fetch-uploads.js';
 import { link } from './link.js';
 import { pull } from './pull.js';
 
@@ -24,11 +25,17 @@ program
 program
   .command('pull <site>')
   .description('Clone the site into a local DDEV environment at production parity')
-  .action(async (site: string) => {
-    const result = await pull(site);
+  .option('--full', 'pull the complete database (skip the lite exclusions)')
+  .action(async (site: string, opts: { full?: boolean }) => {
+    const result = await pull(site, {}, { full: opts.full });
     console.log(`✔ Clone ready: ${result.url}`);
     console.log(`  Admin: ${result.url}/wp-admin/ - ${result.adminUser} / ${result.adminPassword}`);
-    console.log('  Media is not cloned - missing uploads fall back to production (302).');
+    console.log(
+      result.liteSkip.length > 0
+        ? `  Lite DB pull: skipped ${result.liteSkip.join(', ')} (use --full for everything)`
+        : '  Full DB pull: no exclusions',
+    );
+    console.log('  Media is not cloned upfront - missing uploads materialize from production on first request (ferry fetch-uploads for bulk).');
     console.log(
       `  Committed production snapshot ${result.commit.slice(0, 7)}` +
         (result.neutralizedRepos > 0 ? ` (${result.neutralizedRepos} nested repo(s) neutralized)` : ''),
@@ -38,6 +45,18 @@ program
     console.log(`    Report: ${result.provenance.reportPath}`);
     if (result.skipped.length > 0) {
       console.log(`  Skipped ${result.skipped.length} unreadable file(s): ${result.skipped.slice(0, 5).join(', ')}${result.skipped.length > 5 ? ', ...' : ''}`);
+    }
+  });
+
+program
+  .command('fetch-uploads <site> [prefix]')
+  .description('Materialize production uploads into the clone (e.g. 2026/07/), or everything with --all')
+  .option('--all', 'fetch every upload')
+  .action(async (site: string, prefix: string | undefined, opts: { all?: boolean }) => {
+    const result = await fetchUploads(site, { prefix, all: opts.all });
+    console.log(`✔ Materialized ${result.fetched} file(s) (${(result.bytes / 1024 / 1024).toFixed(1)} MB)`);
+    if (result.skipped.length > 0) {
+      console.log(`  Skipped ${result.skipped.length} (gone on production, or failed hash verification): ${result.skipped.slice(0, 5).join(', ')}${result.skipped.length > 5 ? ', ...' : ''}`);
     }
   });
 

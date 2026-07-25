@@ -18,12 +18,12 @@ final class Excludes
         'wp-content/ewww/',
         'wp-content/upgrade/',
         'wp-content/upgrade-temp-backup/',
+        'wp-content/mu-plugins/ferry-',   // ferry's own overlay + stubs - production must never clobber the clone's copies
     ];
 
     const FILES = [
         'wp-config.php',                  // §4.4: never over the bridge, even on explicit request
         'wp-content/debug.log',           // retrievable via control plane later, not pulled
-        'wp-content/mu-plugins/ferry-overlay.php',  // ferry's own overlay - production must never clobber the clone's copy
     ];
 
     const BASENAMES = ['error_log'];
@@ -43,5 +43,18 @@ final class Excludes
             }
         }
         return false;
+    }
+
+    /**
+     * §2.8 escape hatch: an explicitly requested uploads path may be served
+     * (fetch-uploads / materialization) - logs stay blocked even there.
+     */
+    public static function allowed_upload(string $relpath): bool
+    {
+        $relpath = ltrim(str_replace('\\', '/', $relpath), '/');
+        if (in_array(basename($relpath), self::BASENAMES, true)) {
+            return false;
+        }
+        return strpos($relpath, 'wp-content/uploads/') === 0;
     }
 }

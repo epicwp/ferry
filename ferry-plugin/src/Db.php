@@ -70,10 +70,20 @@ final class Db
     }
 
     /**
+     * @param array{schema_only?: bool, where?: string[]} $filter
      * @return array{sql: string, last_key: int, complete: bool}
      */
-    public static function export($wpdb, string $table, $pk, int $after, $before, Budget $budget, int $chunk_rows = self::CHUNK_ROWS, int $byte_budget = self::BYTE_BUDGET): array
+    public static function export($wpdb, string $table, $pk, int $after, $before, Budget $budget, int $chunk_rows = self::CHUNK_ROWS, int $byte_budget = self::BYTE_BUDGET, array $filter = []): array
     {
+        $where = isset($filter['where']) ? $filter['where'] : [];
+        if (!empty($filter['schema_only'])) {
+            $out = '';
+            if ($after === 0) {
+                $create = $wpdb->get_row("SHOW CREATE TABLE `$table`", ARRAY_N);
+                $out = "DROP TABLE IF EXISTS `$table`;\n" . $create[1] . ";\n";
+            }
+            return ['sql' => $out, 'last_key' => $after, 'complete' => true];
+        }
         $numeric = self::numeric_map($wpdb->get_results("SHOW COLUMNS FROM `$table`", ARRAY_A));
         $out = '';
         if ($after === 0) {
@@ -83,7 +93,7 @@ final class Db
         $last = $after;
         $complete = false;
         while (strlen($out) < $byte_budget && !$budget->exhausted()) {
-            $rows = self::fetch_chunk($wpdb, $table, $pk, $last, $before, $chunk_rows);
+            $rows = self::fetch_chunk($wpdb, $table, $pk, $last, $before, $chunk_rows, $where);
             if ($rows === []) {
                 $complete = true;
                 break;
@@ -107,18 +117,20 @@ final class Db
         return ['sql' => $out, 'last_key' => $last, 'complete' => $complete];
     }
 
-    private static function fetch_chunk($wpdb, string $table, $pk, int $after, $before, int $chunk_rows): array
+    private static function fetch_chunk($wpdb, string $table, $pk, int $after, $before, int $chunk_rows, array $where = []): array
     {
+        $extra = '';
+        foreach ($where as $clause) {
+            $extra .= " AND ($clause)";
+        }
         if ($pk !== null) {
-            $sql = "SELECT * FROM `$table` WHERE `$pk` > %d" . ($before !== null ? " AND `$pk` <= %d" : '') . " ORDER BY `$pk` LIMIT %d";
+            $sql = "SELECT * FROM `$table` WHERE `$pk` > %d" . ($before !== null ? " AND `$pk` <= %d" : '') . $extra . " ORDER BY `$pk` LIMIT %d";
             $args = $before !== null ? [$after, $before, $chunk_rows] : [$after, $chunk_rows];
             return $wpdb->get_results($wpdb->prepare($sql, ...$args), ARRAY_A);
         }
-        // No usable pk: OFFSET fallback (§3.5). Without a key there is nothing
-        // stable to ORDER BY; row order across chunks is best-effort and can
-        // skip/duplicate under concurrent writes. Accepted for v0: these are
-        // rare, small plugin tables, and the export's consistency posture is
-        // already best-effort (base doc §3.5).
-        return $wpdb->get_results($wpdb->prepare("SELECT * FROM `$table` LIMIT %d OFFSET %d", $chunk_rows, $after), ARRAY_A);
+        // No usable pk: OFFSET fallback (§3.5). Named rules never target PK-less
+        // tables, but apply the filter here too so the contract holds regardless.
+        $w = $where === [] ? '' : ' WHERE (' . implode(') AND (', $where) . ')';
+        return $wpdb->get_results($wpdb->prepare("SELECT * FROM `$table`$w LIMIT %d OFFSET %d", $chunk_rows, $after), ARRAY_A);
     }
 }

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  applyOverlay, finalizeClone, generateMuPlugin, generateNginxFallback,
+  applyOverlay, finalizeClone, generateHtaccessFallback, generateMuPlugin, generateNginxFallback,
   generateWpConfig, neutralizeDropIns, phpScalar,
 } from '../src/overlay.js';
 import type { SiteInfo } from '../src/profile.js';
@@ -79,14 +79,27 @@ describe('generateMuPlugin', () => {
     expect(mu).not.toContain('fn ('); // must stay old-PHP-safe: runs on production's PHP version
     expect(mu).not.toContain('fn(');
   });
+
+  it('mu-plugin consults the stub registry before blocking', () => {
+    const mu = generateMuPlugin();
+    expect(mu).toContain("function_exists('ferry_stub_response')");
+    expect(mu).toContain('[ferry-harness] stubbed: ');
+    expect(mu.indexOf('ferry_stub_response')).toBeLessThan(mu.indexOf('ferry_blocked'));
+  });
 });
 
-describe('generateNginxFallback', () => {
-  it('302s missing uploads to production via a preferential prefix location', () => {
-    const conf = generateNginxFallback('https://wasgeurtje.nl');
-    // ^~ must win over DDEV's regex media handler; $request_uri carries the full path.
-    expect(conf).toContain('location ^~ /wp-content/uploads/');
-    expect(conf).toContain('return 302 https://wasgeurtje.nl$request_uri;');
+describe('uploads fallback config', () => {
+  it('nginx fallback routes missing uploads to the materializing script', () => {
+    const conf = generateNginxFallback();
+    expect(conf).toContain('try_files $uri @ferry_fallback');
+    expect(conf).toContain('/ferry-uploads-fallback.php?path=$1');
+    expect(conf).not.toContain('302');
+  });
+
+  it('htaccess fallback rewrites to the materializing script', () => {
+    const block = generateHtaccessFallback();
+    expect(block).toContain('/ferry-uploads-fallback.php?path=$1');
+    expect(block).not.toContain('R=302');
   });
 });
 
@@ -105,6 +118,19 @@ describe('filesystem phases', () => {
     expect(existsSync(join(docroot, 'wp-config.php'))).toBe(true);
     expect(existsSync(join(docroot, 'wp-content/mu-plugins/ferry-overlay.php'))).toBe(true);
     expect(existsSync(join(docroot, '.ddev/nginx/ferry-uploads.conf'))).toBe(true);
+  });
+
+  it('applyOverlay copies the stubs asset into mu-plugins', async () => {
+    await applyOverlay(docroot, info(), 'https://clone.ddev.site');
+    const copied = readFileSync(join(docroot, 'wp-content', 'mu-plugins', 'ferry-stubs.php'), 'utf8');
+    expect(copied).toContain('function ferry_stub_response');
+  });
+
+  it('applyOverlay bakes the production origin into the fallback script', async () => {
+    await applyOverlay(docroot, info(), 'https://clone.ddev.site');
+    const script = readFileSync(join(docroot, 'ferry-uploads-fallback.php'), 'utf8');
+    expect(script).toContain("'https://wasgeurtje.nl'"); // origin of the fixture's siteurl
+    expect(script).not.toContain('__FERRY_PROD_ORIGIN__');
   });
 
   it('neutralizeDropIns renames known drop-ins idempotently', () => {

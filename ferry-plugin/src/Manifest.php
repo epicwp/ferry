@@ -11,13 +11,36 @@ final class Manifest
     /**
      * @return array{files: array<int, array{path: string, size: int, hash: ?string}>, next: int, complete: bool}
      */
-    public static function batch(string $root, int $after, Budget $budget, int $cap = 5000): array
+    public static function batch(string $root, int $after, Budget $budget, int $cap = 5000, string $scope = '', string $prefix = ''): array
     {
         $root = rtrim($root, '/');
         $files = [];
         $index = 0;
         $complete = true;
-        foreach (self::walk($root, '') as $entry) {
+        $base = '';
+        $allow_uploads = false;
+        if ($scope === 'uploads') {
+            $allow_uploads = true;
+            $base = 'wp-content/uploads';
+            if ($prefix !== '') {
+                $base .= '/' . trim($prefix, '/');
+            }
+            if (!is_dir($root . '/' . $base)) {
+                return ['files' => [], 'next' => $after, 'complete' => true];
+            }
+            // A prefix whose last segment is a symlink (e.g. .../uploads/2026 ->
+            // /outside) still passes is_dir() above; realpath-contain it against
+            // the uploads root so scope=uploads can't leak metadata from outside
+            // the site (same pattern as Routes::files()'s containment check).
+            $uploads_root = realpath($root . '/wp-content/uploads');
+            $resolved_base = realpath($root . '/' . $base);
+            $contained = $uploads_root !== false && $resolved_base !== false
+                && ($resolved_base === $uploads_root || strpos($resolved_base, $uploads_root . DIRECTORY_SEPARATOR) === 0);
+            if (!$contained) {
+                return ['files' => [], 'next' => $after, 'complete' => true];
+            }
+        }
+        foreach (self::walk($root, $base, $allow_uploads) as $entry) {
             if ($index++ < $after) {
                 continue;
             }
@@ -36,7 +59,7 @@ final class Manifest
     }
 
     /** @return \Generator<array{path: string, size: int, hash: ?string}> */
-    private static function walk(string $root, string $rel): \Generator
+    private static function walk(string $root, string $rel, bool $allow_uploads = false): \Generator
     {
         $abs = $rel === '' ? $root : $root . '/' . $rel;
         $names = scandir($abs, SCANDIR_SORT_ASCENDING);
@@ -53,10 +76,10 @@ final class Manifest
                 continue;
             }
             if (is_dir($abspath)) {
-                if (!Excludes::excluded($relpath . '/')) {
-                    yield from self::walk($root, $relpath);
+                if (!Excludes::excluded($relpath . '/') || ($allow_uploads && Excludes::allowed_upload($relpath . '/'))) {
+                    yield from self::walk($root, $relpath, $allow_uploads);
                 }
-            } elseif (is_file($abspath) && !Excludes::excluded($relpath)) {
+            } elseif (is_file($abspath) && (!Excludes::excluded($relpath) || ($allow_uploads && Excludes::allowed_upload($relpath)))) {
                 yield ['path' => $relpath, 'size' => (int) filesize($abspath), 'hash' => null];
             }
         }

@@ -70,4 +70,52 @@ final class ManifestTest extends TestCase
         $this->assertNull($result['files'][0]['hash']);
         chmod($this->root . '/index.php', 0644);
     }
+
+    public function test_uploads_scope_lists_only_uploads(): void
+    {
+        file_put_contents($this->root . '/wp-content/uploads/2026/a.jpg', 'img');
+        file_put_contents($this->root . '/wp-content/uploads/error_log', 'log');
+        $r = Manifest::batch($this->root, 0, new Budget(10.0), 5000, 'uploads', '');
+        // setUp() already seeds wp-content/uploads/2026/skip.jpg (used by the default-scope
+        // exclusion test); scope=uploads legitimately lists it too, sorted after a.jpg.
+        $this->assertSame(['wp-content/uploads/2026/a.jpg', 'wp-content/uploads/2026/skip.jpg'], array_column($r['files'], 'path'));
+        $this->assertTrue($r['complete']);
+    }
+
+    public function test_uploads_scope_respects_prefix(): void
+    {
+        file_put_contents($this->root . '/wp-content/uploads/2026/a.jpg', 'img');
+        mkdir($this->root . '/wp-content/uploads/2027');
+        file_put_contents($this->root . '/wp-content/uploads/2027/b.jpg', 'img');
+        $r = Manifest::batch($this->root, 0, new Budget(10.0), 5000, 'uploads', '2026/');
+        // setUp() already seeds wp-content/uploads/2026/skip.jpg; the prefix keeps 2027/b.jpg out.
+        $this->assertSame(['wp-content/uploads/2026/a.jpg', 'wp-content/uploads/2026/skip.jpg'], array_column($r['files'], 'path'));
+    }
+
+    public function test_uploads_scope_missing_prefix_dir_is_empty_and_complete(): void
+    {
+        $r = Manifest::batch($this->root, 0, new Budget(10.0), 5000, 'uploads', 'nope/');
+        $this->assertSame([], $r['files']);
+        $this->assertTrue($r['complete']);
+    }
+
+    public function test_default_scope_still_excludes_uploads(): void
+    {
+        file_put_contents($this->root . '/wp-content/uploads/2026/a.jpg', 'img');
+        $r = Manifest::batch($this->root, 0, new Budget(10.0));
+        $this->assertNotContains('wp-content/uploads/2026/a.jpg', array_column($r['files'], 'path'));
+    }
+
+    public function test_uploads_scope_rejects_prefix_symlink_escape(): void
+    {
+        $outside = sys_get_temp_dir() . '/ferry-outside-' . uniqid();
+        mkdir($outside, 0777, true);
+        file_put_contents($outside . '/secret.txt', 'leaked');
+        symlink($outside, $this->root . '/wp-content/uploads/linked');
+        $r = Manifest::batch($this->root, 0, new Budget(10.0), 5000, 'uploads', 'linked/');
+        $this->assertSame([], $r['files']);
+        $this->assertTrue($r['complete']);
+        unlink($this->root . '/wp-content/uploads/linked');
+        exec('rm -rf ' . escapeshellarg($outside));
+    }
 }

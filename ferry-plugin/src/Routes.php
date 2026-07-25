@@ -98,8 +98,16 @@ final class Routes
 
     public static function manifest(\WP_REST_Request $request)
     {
+        $scope = (string) $request->get_param('scope');
+        if ($scope !== '' && $scope !== 'uploads') {
+            return new \WP_Error('ferry_bad_scope', 'Unknown manifest scope.', ['status' => 400]);
+        }
+        $prefix = (string) $request->get_param('prefix');
+        if ($prefix !== '' && preg_match('#(^/)|(\\\\)|(\.\.)|(\x00)#', $prefix)) {
+            return new \WP_Error('ferry_bad_prefix', 'Invalid manifest prefix.', ['status' => 400]);
+        }
         $after = max(0, (int) $request->get_param('after'));
-        $result = Manifest::batch(untrailingslashit(ABSPATH), $after, new Budget());
+        $result = Manifest::batch(untrailingslashit(ABSPATH), $after, new Budget(), 5000, $scope, $prefix);
         $response = new \WP_REST_Response(['files' => $result['files']]);
         $response->header('X-Complete', $result['complete'] ? '1' : '0');
         $response->header('X-Next-Index', (string) $result['next']);
@@ -137,7 +145,7 @@ final class Routes
                 continue;
             }
             $resolved_rel = str_replace(DIRECTORY_SEPARATOR, '/', substr($abs, strlen($root) + 1));
-            if (Excludes::excluded($resolved_rel) || !is_file($abs)) {
+            if ((Excludes::excluded($resolved_rel) && !Excludes::allowed_upload($resolved_rel)) || !is_file($abs)) {
                 $skipped[] = $relpath;
                 $done++;
                 continue;
@@ -177,7 +185,7 @@ final class Routes
             exit;
         }
         $resolved_rel = str_replace(DIRECTORY_SEPARATOR, '/', substr($abs, strlen($root) + 1));
-        if (Excludes::excluded($resolved_rel) || !is_file($abs)) {
+        if ((Excludes::excluded($resolved_rel) && !Excludes::allowed_upload($resolved_rel)) || !is_file($abs)) {
             status_header(404);
             exit;
         }
@@ -211,13 +219,20 @@ final class Routes
         if (!in_array($table, $wpdb->get_col('SHOW TABLES'), true)) {
             return new \WP_Error('ferry_unknown_table', 'Unknown table.', ['status' => 404]);
         }
+        $skip = DbExcludes::parse($request->get_param('skip'));
+        $unknown = DbExcludes::unknown($skip);
+        if ($unknown !== []) {
+            return new \WP_Error('ferry_unknown_skip', 'Unknown skip rule(s): ' . implode(', ', $unknown) . '. The CLI is newer than this plugin - update the Ferry Connect plugin on the site.', ['status' => 400]);
+        }
         $after = max(0, (int) $request->get_param('after'));
         $before = $request->get_param('before') !== null ? (int) $request->get_param('before') : null;
-        $result = Db::export($wpdb, $table, Db::single_pk($wpdb, $table), $after, $before, new Budget());
+        $filter = DbExcludes::plan($table, $wpdb->prefix, $skip);
+        $result = Db::export($wpdb, $table, Db::single_pk($wpdb, $table), $after, $before, new Budget(), Db::CHUNK_ROWS, Db::BYTE_BUDGET, $filter);
         while (ob_get_level()) { ob_end_clean(); }
         header('Content-Type: application/gzip');
         header('X-Complete: ' . ($result['complete'] ? '1' : '0'));
         header('X-Last-Key: ' . $result['last_key']);
+        header('X-Ferry-Skip: ' . implode(',', $skip));
         echo gzencode($result['sql'], 6);
         exit;
     }

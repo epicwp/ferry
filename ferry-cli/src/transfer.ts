@@ -1,6 +1,6 @@
 import type { ManifestEntry } from './client.js';
 import { createWriteStream, promises as fsp } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { finished, pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
@@ -99,7 +99,11 @@ async function fetchBatch(client: FerryClient, paths: string[], destDir: string)
 
 /** §3.4: files larger than one batch come in raw 4MB ranges. */
 async function fetchOversized(client: FerryClient, entry: { path: string; size: number }, destDir: string): Promise<void> {
-  const dest = join(destDir, entry.path);
+  const destRoot = resolve(destDir);
+  const dest = resolve(destDir, entry.path);
+  if (!dest.startsWith(destRoot + sep)) {
+    throw new Error(`refusing range write outside the clone: ${entry.path}`);
+  }
   await fsp.mkdir(dirname(dest), { recursive: true });
   const out = createWriteStream(dest);
   let writeError: Error | null = null;
@@ -146,4 +150,24 @@ export async function fetchAll(
   );
   await Promise.all(oversized.map((e) => limit(() => fetchOversized(client, e, destDir))));
   return { skipped: skippedLists.flat() };
+}
+
+export async function fetchManifest(
+  client: FerryClient,
+  query: Record<string, string> = {},
+): Promise<ManifestEntry[]> {
+  const entries: ManifestEntry[] = [];
+  let after = 0;
+  for (;;) {
+    const { data, headers } = await client.getJson('/ferry/v1/manifest', { ...query, after: String(after) });
+    entries.push(...(data.files as ManifestEntry[]));
+    if (headers['x-complete'] === '1') {
+      return entries;
+    }
+    const next = Number(headers['x-next-index']);
+    if (!Number.isFinite(next) || next <= after) {
+      throw new Error('manifest made no progress - aborting');
+    }
+    after = next;
+  }
 }
