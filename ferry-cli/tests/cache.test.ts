@@ -56,6 +56,26 @@ describe('cache', () => {
     expect(existsSync(join(pkg!.filesDir, 'wp-includes/b.php'))).toBe(false); // unproven bytes never cached
   });
 
+  it('falls back to the en_US core zip when the locale zip 404s, proving bytes against the locale list', async () => {
+    const shared = '<?php // shared';
+    const enUsOnly = '<?php // en_US';
+    mock = await startMockWporg({
+      checksums: { '6.8.2-nl_NL': { 'wp-includes/a.php': md5(shared), 'wp-includes/b.php': md5('locale-only') } },
+      zips: { '/release/wordpress-6.8.2.zip': zipOf('wordpress', { 'wp-includes/a.php': shared, 'wp-includes/b.php': enUsOnly }) },
+    });
+    const pkg = await ensurePackage(cacheDir, { type: 'core', slug: 'core', version: '6.8.2', locale: 'nl_NL' }, mock.endpoints);
+    expect(pkg).not.toBeNull();
+    expect(pkg!.checksums).toEqual({ 'wp-includes/a.php': md5(shared), 'wp-includes/b.php': md5('locale-only') }); // full nl_NL list kept
+    expect(existsSync(join(pkg!.filesDir, 'wp-includes/a.php'))).toBe(true); // proven byte
+    expect(existsSync(join(pkg!.filesDir, 'wp-includes/b.php'))).toBe(false); // en_US bytes mismatch the nl list - never cached
+    expect(pkg!.ref).toEqual({ type: 'core', slug: 'core', version: '6.8.2', locale: 'nl_NL' });
+    // Verify fallback ordering: nl_NL zip attempt before en_US zip attempt
+    const nlZipAttempt = mock.requests.findIndex(r => r.includes('/release/nl_NL/'));
+    const enZipAttempt = mock.requests.findIndex(r => r === '/release/wordpress-6.8.2.zip');
+    expect(nlZipAttempt).toBeGreaterThanOrEqual(0); // nl_NL zip was attempted first (and 404'd)
+    expect(enZipAttempt).toBeGreaterThan(nlZipAttempt); // en_US zip was attempted second
+  });
+
   it('returns null when the zip 404s or the API has no checksums for core', async () => {
     mock = await startMockWporg({});
     expect(await ensurePackage(cacheDir, { type: 'plugin', slug: 'nope', version: '1.0' }, mock.endpoints)).toBeNull();
