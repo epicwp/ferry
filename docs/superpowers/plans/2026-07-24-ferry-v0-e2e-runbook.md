@@ -160,7 +160,9 @@ Provenance: ⚠ 1 modified core file(s), 1 unexpected file(s) in wp-admin//wp-in
 
    All three files are **authentic WordPress bytes** — the core checksum list already vouches for them. The consequence is that a stock WordPress install can never reach `core and wp.org packages verified clean`; it always reports 2–3 phantom "modified plugin/theme file(s)". The fix is to prefer the core checksum list for bundled themes when the version matches the core release, but that is a code change and is out of scope for this gate.
 
-No product code was changed by this gate.
+   **Addendum (2026-07-25):** fixed in `f6fd66a` — `report.ts` now treats a non-core file as authentic when its full `wp-content/…` path matches the core checksum list with an equal hash. Re-verified on the live fixture: `Files: 3957 reused, 0 reconstructed, 3 fetched` / `Provenance: core and wp.org packages verified clean`, all three theme entries with empty `modified[]`, tree still `TREE_A`, HTTP 200, 26.7s.
+
+Apart from that follow-up fix, no product code was changed by this gate.
 
 ## Reproduce / teardown
 
