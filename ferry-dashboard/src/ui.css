@@ -75,3 +75,30 @@ a:hover { color: oklch(0.44 0.16 262); }
 .chip--syncing { color: var(--accent-ink); }
 .chip--ready { color: var(--green); }
 .chip--error, .chip--refused { color: var(--red); }
+
+.logo { display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; background: var(--accent); flex: none; }
+.logo__glyph { width: 43%; height: 43%; border: 2px solid #fff; border-radius: 4px; border-bottom-color: transparent; transform: rotate(45deg); }
+.shell { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; background: var(--surface); }
+.sidebar { background: var(--surface-2); border-right: 1px solid var(--border); padding: 20px 16px; display: flex; flex-direction: column; }
+.sidebar__brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 20px; font-weight: 600; font-size: 16px; letter-spacing: -0.02em; }
+.sidebar__nav { display: flex; flex-direction: column; gap: 2px; }
+.sidebar__item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; color: var(--muted); }
+.sidebar__item--active { background: var(--accent-weak); color: var(--accent-ink); font-weight: 500; }
+.sidebar__dot { width: 6px; height: 6px; border-radius: 2px; background: var(--faint); }
+.sidebar__dot--accent { background: var(--accent); }
+.sidebar__account { margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); }
+.sidebar__avatar { width: 30px; height: 30px; border-radius: 8px; background: oklch(0.6 0.12 300); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex: none; }
+.sidebar__who { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.sidebar__email { font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar__logout { border: 0; background: none; padding: 0; font-size: 11.5px; color: var(--faint); text-align: left; cursor: pointer; }
+.sidebar__logout:hover { color: var(--accent); }
+.main { display: flex; flex-direction: column; min-height: 0; }
+.main__header { height: 60px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 28px; }
+.main__header h1 { font-weight: 600; font-size: 16px; }
+.main__body { flex: 1; overflow: auto; }
+.auth-panel { width: 100%; max-width: 320px; }
+.auth-panel__brand { display: flex; align-items: center; gap: 10px; margin-bottom: 26px; font-weight: 600; font-size: 17px; letter-spacing: -0.02em; }
+.auth-panel h1 { font-size: 19px; letter-spacing: -0.02em; margin-bottom: 6px; }
+.auth-panel__sub { font-size: 13px; color: var(--muted); margin-bottom: 22px; }
+.auth-panel__switch { text-align: center; font-size: 12.5px; color: var(--muted); margin-top: 20px; }
+.auth-panel__switch button { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }

@@ -5,3 +5,5 @@ vendor/
 .DS_Store
 design/*
 !design/README.md
+test-results/
+playwright-report/
