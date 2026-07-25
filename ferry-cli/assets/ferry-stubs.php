@@ -94,6 +94,11 @@ function ferry_stub_woocommerce($url)
     if (substr($path, -14) === '/subscriptions') {
         return ferry_stub_http_200('[]');
     }
+    // WC_Admin_Addons::get_sections() array_maps over this response - must be a
+    // list, not the generic {} shape, or WooCommerce's own Extensions page fatals.
+    if (strpos($path, '/wccom-extensions/') !== false && substr($path, -11) === '/categories') {
+        return ferry_stub_http_200('[]');
+    }
     return ferry_stub_http_200(new stdClass());
 }
 

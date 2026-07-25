@@ -60,6 +60,16 @@ final class StubsTest extends TestCase
         $this->assertSame('{}', $other['body']);
     }
 
+    public function test_woocommerce_extensions_categories_is_a_list(): void
+    {
+        // WC_Admin_Addons::get_sections() array_maps over this response - a {}
+        // shape fatals WooCommerce's own Extensions admin page (found via E2E gate 2).
+        $categories = ferry_stub_response('https://woocommerce.com/wp-json/wccom-extensions/1.0/categories?locale=en_US', []);
+        $this->assertSame('[]', $categories['body']);
+        $other = ferry_stub_response('https://woocommerce.com/wp-json/wccom-extensions/1.0/search?term=x', []);
+        $this->assertSame('{}', $other['body']);
+    }
+
     public function test_unrelated_hosts_are_not_stubbed(): void
     {
         $this->assertNull(ferry_stub_response('https://api.stripe.com/v1/charges', ['body' => ['amount' => 1]]));
