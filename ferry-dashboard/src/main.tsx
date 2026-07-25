@@ -6,6 +6,7 @@ import { SitesPage } from './pages/sites';
 import { NewSitePage } from './pages/new-site';
 import { InstallPage } from './pages/install';
 import { PairPage } from './pages/pair';
+import { SyncPage } from './pages/sync';
 import './ui.css';
 
 const router = createBrowserRouter([
@@ -17,6 +18,7 @@ const router = createBrowserRouter([
       { path: '/sites/new', element: <NewSitePage /> },
       { path: '/sites/:id/install', element: <InstallPage /> },
       { path: '/sites/:id/pair', element: <PairPage /> },
+      { path: '/sites/:id/sync', element: <SyncPage /> },
     ],
   },
 ]);
