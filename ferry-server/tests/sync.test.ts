@@ -81,6 +81,21 @@ describe('SyncManager', () => {
     expect(seen.at(-1)!.status).toBe('ready');
   });
 
+  it('clears the stale lastError the moment a retry enters syncing', async () => {
+    const { app, store } = makeApp({
+      engine: stubEngine({ pull: () => new Promise(() => {}), cloneUrl: (s) => `https://${s}.ddev.site` }),
+    });
+    const cookie = await signup(app);
+    const created = await app.inject({ method: 'POST', url: '/api/sites', headers: { cookie }, payload: { name: 'S', url: 'https://retry.example' } });
+    const id = created.json().id as number;
+    store.setStatus(id, 'error', { lastError: 'previous failure' });
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${id}/sync`, headers: { cookie } });
+    expect(res.statusCode).toBe(202);
+    const detail = await app.inject({ method: 'GET', url: `/api/sites/${id}`, headers: { cookie } });
+    expect(detail.json().status).toBe('syncing');
+    expect(detail.json().lastError).toBeNull();
+  });
+
   it('isolates throwing subscribers and ensures other subscribers receive final state', async () => {
     const done = deferred<PullResult>();
     let emit: ((e: PullProgress) => void) | undefined;

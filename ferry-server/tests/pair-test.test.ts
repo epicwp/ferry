@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MultisiteError } from '../../ferry-cli/src/link.js';
 import { makeApp, signup, stubEngine } from './helpers/testApp.js';
 
 async function makeSite(app: import('fastify').FastifyInstance, cookie: string): Promise<number> {
@@ -20,7 +21,7 @@ describe('pairing', () => {
 
   it('maps multisite refusal to refused_multisite + 422', async () => {
     const { app } = makeApp({
-      engine: stubEngine({ link: async () => { throw new Error('This site is a multisite install. Ferry refuses multisite by design - single sites only for now.'); } }),
+      engine: stubEngine({ link: async () => { throw new MultisiteError('This site is a multisite install. Ferry refuses multisite by design - single sites only for now.'); } }),
     });
     const cookie = await signup(app);
     const id = await makeSite(app, cookie);
@@ -28,6 +29,19 @@ describe('pairing', () => {
     expect(res.statusCode).toBe(422);
     const detail = await app.inject({ method: 'GET', url: `/api/sites/${id}`, headers: { cookie } });
     expect(detail.json().status).toBe('refused_multisite');
+  });
+
+  it('does not refuse on a plain error that merely mentions multisite', async () => {
+    const { app, store } = makeApp({
+      engine: stubEngine({ link: async () => { throw new Error('server said: multisite maintenance page returned'); } }),
+    });
+    const cookie = await signup(app);
+    const created = await app.inject({ method: 'POST', url: '/api/sites', headers: { cookie }, payload: { name: 'S', url: 'https://s.example' } });
+    const id = created.json().id as number;
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${id}/pair`, headers: { cookie }, payload: { code: 'AAAA-BBBB' } });
+    expect(res.statusCode).toBe(400);
+    const detail = await app.inject({ method: 'GET', url: `/api/sites/${id}`, headers: { cookie } });
+    expect(detail.json().status).toBe('new');
   });
 
   it('keeps status new on a wrong code and refuses re-pairing', async () => {

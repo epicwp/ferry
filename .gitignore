@@ -3,3 +3,7 @@ dist/
 vendor/
 .phpunit.result.cache
 .DS_Store
+design/*
+!design/README.md
+test-results/
+playwright-report/

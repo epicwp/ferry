@@ -1,5 +1,5 @@
 {
   "name": "ferry",
   "private": true,
-  "workspaces": ["ferry-cli", "ferry-server"]
+  "workspaces": ["ferry-cli", "ferry-server", "ferry-dashboard"]
 }

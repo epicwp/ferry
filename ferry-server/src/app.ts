@@ -1,4 +1,5 @@
 import cookie from '@fastify/cookie';
+import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Engine } from './engine.js';
 import { authRoutes } from './routes/auth.js';
@@ -13,6 +14,7 @@ export interface AppDeps {
   store: Store;
   engine?: Engine;   // wired in Task 5
   pluginZip?: Buffer; // wired in Task 7
+  staticDir?: string; // built dashboard (prod mode); dev uses the Vite proxy instead
 }
 
 declare module 'fastify' {
@@ -65,6 +67,16 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       .header('content-disposition', 'attachment; filename="ferry-connect.zip"')
       .send(deps.pluginZip);
   });
+
+  if (deps.staticDir) {
+    void app.register(fastifyStatic, { root: deps.staticDir });
+    app.setNotFoundHandler((request, reply) => {
+      if (request.method === 'GET' && !request.url.startsWith('/api/')) {
+        return reply.sendFile('index.html'); // SPA fallback: the router owns non-API paths
+      }
+      return reply.code(404).send({ error: 'Not found.' });
+    });
+  }
 
   return app;
 }

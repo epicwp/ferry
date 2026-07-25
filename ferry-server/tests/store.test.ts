@@ -66,4 +66,11 @@ describe('Store', () => {
     });
     expect(store.recoverInterruptedSyncs()).toBe(0);
   });
+
+  it('rethrows non-constraint errors instead of swallowing them', () => {
+    const store = new Store(':memory:');
+    store.close();
+    expect(() => store.createUser('x@example.com', 'hash')).toThrow();
+    expect(() => store.createSite(1, 'X', 'https://x.example', 'x-example')).toThrow();
+  });
 });

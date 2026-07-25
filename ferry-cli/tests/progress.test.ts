@@ -62,6 +62,9 @@ describe('pull progress', () => {
       dbTables: [{
         name: 'wp_posts', rows: 1, bytes: 64, pk: 'ID', maxpk: 1,
         batches: [{ sql: 'INSERT INTO wp_posts VALUES (1);\n', lastKey: 1, complete: true }],
+      }, {
+        name: 'wp_options', rows: 1, bytes: 64, pk: 'option_id', maxpk: 1,
+        batches: [{ sql: 'INSERT INTO wp_options VALUES (1);\n', lastKey: 1, complete: true }],
       }],
     });
     saveProfile({ url: mock.base, secret: 's', slug: 'fixture', clonePath: join(home, 'clone') });
@@ -82,6 +85,11 @@ describe('pull progress', () => {
     expect(fileEvents.at(-1)?.current).toBe(fileEvents.at(-1)?.total);
     const dbEvent = events.find((e) => e.phase === 'db' && e.detail === 'wp_posts');
     expect(dbEvent).toBeDefined();
+    const dbEvents = events.filter((e) => e.phase === 'db' && e.current !== undefined);
+    expect(dbEvents[0]?.current).toBe(1); // 1-based: never "0 of N"
+    expect(dbEvents.at(-1)?.current).toBe(2); // reaches N of N, like the files counter
+    expect(dbEvents.at(-1)?.total).toBe(2);
+    expect(dbEvents.at(-1)?.detail).toBe('wp_options');
     expect(phases.at(-1)).toBe('done');
     // clone actually materialized — progress reporting must not change behavior
     expect(existsSync(join(home, 'clone', 'index.php'))).toBe(true);

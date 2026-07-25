@@ -48,6 +48,10 @@ interface SiteRow {
   last_error: string | null; last_sync_at: string | null; verified_at: string | null; created_at: string;
 }
 
+function isConstraintError(err: unknown): boolean {
+  return err instanceof Error && String((err as { code?: unknown }).code ?? '').startsWith('SQLITE_CONSTRAINT');
+}
+
 function toSite(row: SiteRow): Site {
   return {
     id: row.id, userId: row.user_id, name: row.name, url: row.url, slug: row.slug,
@@ -75,8 +79,9 @@ export class Store {
         .prepare('INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)')
         .run(email, passwordHash, new Date().toISOString());
       return { id: Number(info.lastInsertRowid), email, passwordHash };
-    } catch {
-      return undefined; // UNIQUE violation: email already registered
+    } catch (err) {
+      if (isConstraintError(err)) return undefined; // UNIQUE violation: email already registered
+      throw err;
     }
   }
 
@@ -112,8 +117,9 @@ export class Store {
         .prepare('INSERT INTO sites (user_id, name, url, slug, status, created_at) VALUES (?, ?, ?, ?, ?, ?)')
         .run(userId, name, url, slug, 'new', new Date().toISOString());
       return this.siteFor(userId, Number(info.lastInsertRowid));
-    } catch {
-      return undefined; // UNIQUE violation: slug already registered on this server
+    } catch (err) {
+      if (isConstraintError(err)) return undefined; // UNIQUE violation: slug already registered on this server
+      throw err;
     }
   }
 

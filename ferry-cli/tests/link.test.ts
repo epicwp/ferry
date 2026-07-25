@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { link } from '../src/link.js';
+import { link, MultisiteError } from '../src/link.js';
 import { loadProfile } from '../src/profile.js';
 
 let server: Server;
@@ -46,12 +46,14 @@ describe('link', () => {
     expect(loadProfile(profile.slug).secret).toBe('s3cret');
   });
 
-  it('maps the multisite refusal to a clear error', async () => {
+  it('maps the multisite refusal to a typed error', async () => {
     const base = await listen((req, res) => {
       res.statusCode = 409;
       res.end(JSON.stringify({ code: 'ferry_multisite', message: 'Multisite is not supported.' }));
     });
-    await expect(link(base, 'XXXX-XXXX')).rejects.toThrowError(/[Mm]ultisite/);
+    const err = await link(base, 'XXXX-XXXX').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MultisiteError);
+    expect(String((err as Error).message)).toMatch(/multisite/i);
   });
 
   it('maps a bad code to a clear error', async () => {

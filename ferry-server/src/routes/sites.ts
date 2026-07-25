@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { MultisiteError } from '../../../ferry-cli/src/link.js';
 import { slugFromUrl } from '../../../ferry-cli/src/profile.js';
 import type { AppDeps } from '../app.js';
 import type { Site } from '../store.js';
@@ -63,7 +64,7 @@ export function siteRoutes(app: FastifyInstance, deps: AppDeps): void {
       await engine.link(site.url, code.trim());
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (/multisite/i.test(message)) {
+      if (err instanceof MultisiteError) {
         deps.store.setStatus(site.id, 'refused_multisite', { lastError: message });
         return reply.code(422).send({ error: message });
       }
