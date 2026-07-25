@@ -26,6 +26,7 @@ export function SyncPage() {
   const [sync, setSync] = useState<SyncState | null>(null);
   const [test, setTest] = useState<TestResult | null>(null);
   const [testError, setTestError] = useState('');
+  const [startError, setStartError] = useState('');
   const [copied, setCopied] = useState(false);
   const testedRef = useRef(false);
   const navigate = useNavigate();
@@ -51,7 +52,13 @@ export function SyncPage() {
   if (!site || !sync) return <div className="page-center" />;
 
   const start = async () => {
-    await api.post(`/api/sites/${id}/sync`).catch(() => {}); // 409 (already running) resolves via SSE anyway
+    setStartError('');
+    try {
+      await api.post(`/api/sites/${id}/sync`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) return; // already running — SSE resolves it anyway
+      setStartError(err instanceof ApiError ? err.message : 'Could not start the sync — try again.');
+    }
   };
   const copy = async () => {
     if (sync.cloneUrl) {
@@ -84,6 +91,7 @@ export function SyncPage() {
             {test && <div className="sync-panel__test">✓ Connected — WordPress {test.wp} · PHP {test.php} · {test.db}</div>}
             {testError && <div className="form-error">{testError}</div>}
             {!test && !testError && site.status === 'paired' && <div className="sync-panel__testing">Testing the connection…</div>}
+            {startError && <div className="form-error">{startError}</div>}
             <button className="btn btn--primary" style={{ width: '100%', marginTop: 14 }} onClick={start} disabled={!test}>
               Start first sync
             </button>
@@ -138,6 +146,7 @@ export function SyncPage() {
         {sync.status === 'error' && (
           <div className="card">
             <div className="form-error" style={{ marginTop: 0 }}>{sync.error}</div>
+            {startError && <div className="form-error">{startError}</div>}
             <button className="btn btn--primary" style={{ width: '100%', marginTop: 14 }} onClick={start}>
               Retry sync
             </button>
