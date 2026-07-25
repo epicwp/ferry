@@ -8,7 +8,7 @@ import * as tar from 'tar';
 
 export interface MockPlugin {
   base: string;
-  requests: { files: string[][] };
+  requests: { files: string[][]; db: Record<string, string>[] };
   close(): void;
 }
 
@@ -31,10 +31,11 @@ export async function startMockPlugin(
     dbTables?: DbTableFixture[];
     info?: object;
     manifest?: { path: string; size: number; hash: string | null }[];
+    skipSupported?: boolean;
   } = {},
 ): Promise<MockPlugin> {
   let firstFilesCall = true;
-  const requests = { files: [] as string[][] };
+  const requests = { files: [] as string[][], db: [] as Record<string, string>[] };
 
   async function buildBatch(paths: string[], complete: boolean, nextIndex: number): Promise<Buffer> {
     const staging = mkdtempSync(join(tmpdir(), 'ferry-mock-'));
@@ -70,6 +71,11 @@ export async function startMockPlugin(
         res.statusCode = 404;
         res.end('{"code":"ferry_unknown_table"}');
         return;
+      }
+      requests.db.push(Object.fromEntries(url.searchParams.entries()));
+      const skip = url.searchParams.get('skip');
+      if (skip !== null && opts.skipSupported !== false) {
+        res.setHeader('X-Ferry-Skip', skip);
       }
       if (table.pk !== null && url.searchParams.get('before') !== String(table.maxpk)) {
         res.statusCode = 500;

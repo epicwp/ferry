@@ -11,7 +11,10 @@ export interface TableInfo {
   maxpk: number | null;
 }
 
-export async function pullDatabase(client: FerryClient, dumpDir: string): Promise<string> {
+/** Lite-pull rule names; must stay in sync with the plugin's DbExcludes::NAMES. */
+export const LITE_SKIP = ['revisions', 'transients', 'sessions', 'as_logs', 'as_completed'];
+
+export async function pullDatabase(client: FerryClient, dumpDir: string, skip: string[] = []): Promise<string> {
   await fsp.mkdir(dumpDir, { recursive: true });
   const { data } = await client.getJson('/ferry/v1/db/tables');
   const tables = data.tables as TableInfo[];
@@ -22,10 +25,18 @@ export async function pullDatabase(client: FerryClient, dumpDir: string): Promis
     let after = 0;
     for (;;) {
       const query: Record<string, string> = { table: table.name, after: String(after) };
+      if (skip.length > 0) {
+        query.skip = skip.join(',');
+      }
       if (table.maxpk !== null) {
         query.before = String(table.maxpk); // §3.5: snapshot bound fixed at export start
       }
       const { buffer, headers } = await client.getBuffer('/ferry/v1/db', query);
+      if (skip.length > 0 && headers['x-ferry-skip'] !== skip.join(',')) {
+        throw new Error(
+          'the Ferry Connect plugin on the site does not support lite pulls - update the plugin on the site, or re-run with --full',
+        );
+      }
       await fsp.appendFile(file, gunzipSync(buffer));
       if (headers['x-complete'] === '1') {
         break;

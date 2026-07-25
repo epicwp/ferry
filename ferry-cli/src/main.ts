@@ -24,10 +24,16 @@ program
 program
   .command('pull <site>')
   .description('Clone the site into a local DDEV environment at production parity')
-  .action(async (site: string) => {
-    const result = await pull(site);
+  .option('--full', 'pull the complete database (skip the lite exclusions)')
+  .action(async (site: string, opts: { full?: boolean }) => {
+    const result = await pull(site, {}, { full: opts.full });
     console.log(`✔ Clone ready: ${result.url}`);
     console.log(`  Admin: ${result.url}/wp-admin/ - ${result.adminUser} / ${result.adminPassword}`);
+    console.log(
+      result.liteSkip.length > 0
+        ? `  Lite DB pull: skipped ${result.liteSkip.join(', ')} (use --full for everything)`
+        : '  Full DB pull: no exclusions',
+    );
     console.log('  Media is not cloned - missing uploads fall back to production (302).');
     console.log(
       `  Committed production snapshot ${result.commit.slice(0, 7)}` +
