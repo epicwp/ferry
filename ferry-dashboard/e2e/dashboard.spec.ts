@@ -44,3 +44,9 @@ test('creating a site shows install instructions with the plugin download', asyn
   await page.getByRole('button', { name: /I have a code/ }).click();
   await expect(page).toHaveURL(/\/pair$/);
 });
+
+test('a bad site id on the install page shows an error instead of a blank page', async ({ page }) => {
+  await signUp(page);
+  await page.goto('/sites/999999/install');
+  await expect(page.locator('.form-error')).toContainText('Site not found.');
+});

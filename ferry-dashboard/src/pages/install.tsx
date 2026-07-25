@@ -1,16 +1,30 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { api, type Site } from '../api';
+import { api, ApiError, type Site } from '../api';
 import { AppLayout } from '../layout';
 import { Stepper } from '../stepper';
 
 export function InstallPage() {
   const { id } = useParams();
   const [site, setSite] = useState<Site | null>(null);
+  const [error, setError] = useState('');
   const navigate = useNavigate();
   useEffect(() => {
-    void api.get<Site>(`/api/sites/${id}`).then(setSite);
+    void api.get<Site>(`/api/sites/${id}`).then(setSite).catch((err) => {
+      setError(err instanceof ApiError ? err.message : 'Failed to load the site.');
+    });
   }, [id]);
+
+  if (error) {
+    return (
+      <AppLayout title="New site">
+        <div className="narrow">
+          <div className="form-error">{error}</div>
+          <Link to="/" style={{ display: 'inline-block', marginTop: 12 }}>← Back to sites</Link>
+        </div>
+      </AppLayout>
+    );
+  }
   if (!site) return <AppLayout title="New site">{null}</AppLayout>;
 
   return (
