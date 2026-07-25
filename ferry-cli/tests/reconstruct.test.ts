@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { md5File } from '../src/provenance/md5.js';
 import { reconstruct } from '../src/provenance/reconstruct.js';
@@ -58,5 +58,19 @@ describe('reconstruct', () => {
     const { failed } = await reconstruct(items, docroot);
     expect(failed).toHaveLength(2);
     expect(await md5File(join(docroot, 'wp-includes/bad.php'))).toBeNull();
+  });
+
+  it('rejects path traversal attempts and never writes outside docroot', async () => {
+    const validContent = 'safe content';
+    writeFileSync(join(cache, 'safe.php'), validContent);
+    const items = [
+      { path: '../escape.php', sourceFile: join(cache, 'safe.php'), md5: md5(validContent) },
+      { path: '/abs/escape.php', sourceFile: join(cache, 'safe.php'), md5: md5(validContent) },
+    ];
+    const { failed } = await reconstruct(items, docroot);
+    expect(failed).toHaveLength(2);
+    // Verify nothing was written outside docroot
+    expect(existsSync(join(dirname(docroot), 'escape.php'))).toBe(false);
+    expect(existsSync('/abs/escape.php')).toBe(false);
   });
 });

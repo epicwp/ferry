@@ -1,5 +1,5 @@
 import { constants, promises as fsp } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import pLimit from 'p-limit';
 import { md5File } from './md5.js';
 
@@ -15,12 +15,17 @@ export async function reconstruct(items: ReconstructItem[], docroot: string): Pr
   const limit = pLimit(8);
   const failed: ReconstructItem[] = [];
   await Promise.all(items.map((item) => limit(async () => {
+    const dest = resolve(docroot, item.path);
+    // Ensure the destination is contained within docroot to prevent path traversal
+    if (!dest.startsWith(resolve(docroot) + sep)) {
+      failed.push(item);
+      return;
+    }
     if ((await md5File(item.sourceFile)) !== item.md5) {
       failed.push(item);
       return;
     }
     try {
-      const dest = join(docroot, item.path);
       await fsp.mkdir(dirname(dest), { recursive: true });
       await fsp.copyFile(item.sourceFile, dest, constants.COPYFILE_FICLONE);
     } catch {
