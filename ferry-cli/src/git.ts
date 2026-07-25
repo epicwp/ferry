@@ -86,7 +86,7 @@ const GITIGNORE = `/.gitignore
 /wp-config-ddev.php
 /.ddev/
 /wp-content/uploads/
-/wp-content/mu-plugins/ferry-overlay.php
+/wp-content/mu-plugins/ferry-*
 `;
 
 export async function writeGitignore(dir: string): Promise<void> {

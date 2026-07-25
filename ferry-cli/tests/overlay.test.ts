@@ -79,6 +79,13 @@ describe('generateMuPlugin', () => {
     expect(mu).not.toContain('fn ('); // must stay old-PHP-safe: runs on production's PHP version
     expect(mu).not.toContain('fn(');
   });
+
+  it('mu-plugin consults the stub registry before blocking', () => {
+    const mu = generateMuPlugin();
+    expect(mu).toContain("function_exists('ferry_stub_response')");
+    expect(mu).toContain('[ferry-harness] stubbed: ');
+    expect(mu.indexOf('ferry_stub_response')).toBeLessThan(mu.indexOf('ferry_blocked'));
+  });
 });
 
 describe('generateNginxFallback', () => {
@@ -105,6 +112,12 @@ describe('filesystem phases', () => {
     expect(existsSync(join(docroot, 'wp-config.php'))).toBe(true);
     expect(existsSync(join(docroot, 'wp-content/mu-plugins/ferry-overlay.php'))).toBe(true);
     expect(existsSync(join(docroot, '.ddev/nginx/ferry-uploads.conf'))).toBe(true);
+  });
+
+  it('applyOverlay copies the stubs asset into mu-plugins', async () => {
+    await applyOverlay(docroot, info(), 'https://clone.ddev.site');
+    const copied = readFileSync(join(docroot, 'wp-content', 'mu-plugins', 'ferry-stubs.php'), 'utf8');
+    expect(copied).toContain('function ferry_stub_response');
   });
 
   it('neutralizeDropIns renames known drop-ins idempotently', () => {

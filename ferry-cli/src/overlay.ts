@@ -91,6 +91,13 @@ add_filter('pre_option_siteurl', function () { return FERRY_LOCAL_URL; });
 add_filter('pre_option_home', function () { return FERRY_LOCAL_URL; });
 add_filter('pre_wp_mail', '__return_false');
 add_filter('pre_http_request', function ($pre, $args, $url) {
+    if (function_exists('ferry_stub_response')) {
+        $stub = ferry_stub_response($url, $args);
+        if ($stub !== null) {
+            error_log('[ferry-harness] stubbed: ' . $url);
+            return $stub;
+        }
+    }
     error_log('[ferry-harness] blocked outbound HTTP: ' . $url);
     return new WP_Error('ferry_blocked', 'ferry harness: outbound HTTP is blocked in the clone (' . $url . ')');
 }, 1, 3);
@@ -129,6 +136,7 @@ export async function applyOverlay(docroot: string, info: SiteInfo, localUrl: st
   await fsp.writeFile(join(docroot, 'wp-config.php'), generateWpConfig(info, localUrl));
   await fsp.mkdir(join(docroot, 'wp-content', 'mu-plugins'), { recursive: true });
   await fsp.writeFile(join(docroot, 'wp-content', 'mu-plugins', 'ferry-overlay.php'), generateMuPlugin());
+  await fsp.copyFile(assetPath('ferry-stubs.php'), join(docroot, 'wp-content', 'mu-plugins', 'ferry-stubs.php'));
   await fsp.mkdir(join(docroot, '.ddev', 'nginx'), { recursive: true });
   await fsp.writeFile(
     join(docroot, '.ddev', 'nginx', 'ferry-uploads.conf'),

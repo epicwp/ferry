@@ -41,6 +41,13 @@ final class ExcludesTest extends TestCase
         ];
     }
 
+    public function test_ferry_mu_plugins_prefix_is_excluded(): void
+    {
+        $this->assertTrue(Excludes::excluded('wp-content/mu-plugins/ferry-overlay.php'));
+        $this->assertTrue(Excludes::excluded('wp-content/mu-plugins/ferry-stubs.php'));
+        $this->assertFalse(Excludes::excluded('wp-content/mu-plugins/loader.php'));
+    }
+
     public function includedPaths(): array
     {
         return [
