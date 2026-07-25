@@ -42,6 +42,15 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   if (deps.engine) {
     syncRoutes(app, deps, new SyncManager(deps.store, deps.engine));
   }
+
+  app.get('/api/plugin.zip', { preHandler: app.requireUser }, async (_request, reply) => {
+    if (!deps.pluginZip) return reply.code(404).send({ error: 'Plugin artifact not available.' });
+    return reply
+      .header('content-type', 'application/zip')
+      .header('content-disposition', 'attachment; filename="ferry-connect.zip"')
+      .send(deps.pluginZip);
+  });
+
   return app;
 }
 
