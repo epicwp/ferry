@@ -33,8 +33,8 @@ final class DbExcludesTest extends TestCase
     public function test_transients_filter_escapes_like_wildcards(): void
     {
         $where = DbExcludes::plan('wp_options', 'wp_', ['transients'])['where'][0];
-        $this->assertStringContainsString("NOT LIKE '\\_transient\\_%'", $where);
-        $this->assertStringContainsString("NOT LIKE '\\_site\\_transient\\_%'", $where);
+        $this->assertStringContainsString("NOT LIKE '\\_transient\\_%%'", $where);
+        $this->assertStringContainsString("NOT LIKE '\\_site\\_transient\\_%%'", $where);
     }
 
     public function test_row_filter_lands_in_keyset_chunk_query(): void
