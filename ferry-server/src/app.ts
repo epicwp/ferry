@@ -25,6 +25,21 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify();
   void app.register(cookie);
 
+  // Some routes (e.g. POST .../test, .../sync) are called with an application/json
+  // content-type but no body. Fastify's default parser rejects an empty body for that
+  // content-type; treat it as "no body" instead.
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (_request, body, done) => {
+    if (body === '') {
+      done(null, undefined);
+      return;
+    }
+    try {
+      done(null, JSON.parse(body as string));
+    } catch (err) {
+      done(err as Error, undefined);
+    }
+  });
+
   // Session gate for everything private. Routes opt in via { preHandler: app.requireUser }.
   const requireUser = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const token = request.cookies[SESSION_COOKIE];
