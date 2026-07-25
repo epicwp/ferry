@@ -60,4 +60,13 @@ final class ExcludesTest extends TestCase
             ['wp-content/mu-plugins/other-plugin.php'],
         ];
     }
+
+    public function test_allowed_upload(): void
+    {
+        $this->assertTrue(Excludes::allowed_upload('wp-content/uploads/2026/07/a.jpg'));
+        $this->assertTrue(Excludes::allowed_upload('wp-content/uploads/2026/'));
+        $this->assertFalse(Excludes::allowed_upload('wp-content/uploads/error_log'), 'logs stay blocked even under uploads');
+        $this->assertFalse(Excludes::allowed_upload('wp-content/cache/x.jpg'));
+        $this->assertFalse(Excludes::allowed_upload('wp-config.php'));
+    }
 }

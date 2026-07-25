@@ -44,4 +44,17 @@ final class Excludes
         }
         return false;
     }
+
+    /**
+     * §2.8 escape hatch: an explicitly requested uploads path may be served
+     * (fetch-uploads / materialization) - logs stay blocked even there.
+     */
+    public static function allowed_upload(string $relpath): bool
+    {
+        $relpath = ltrim(str_replace('\\', '/', $relpath), '/');
+        if (in_array(basename($relpath), self::BASENAMES, true)) {
+            return false;
+        }
+        return strpos($relpath, 'wp-content/uploads/') === 0;
+    }
 }

@@ -98,8 +98,16 @@ final class Routes
 
     public static function manifest(\WP_REST_Request $request)
     {
+        $scope = (string) $request->get_param('scope');
+        if ($scope !== '' && $scope !== 'uploads') {
+            return new \WP_Error('ferry_bad_scope', 'Unknown manifest scope.', ['status' => 400]);
+        }
+        $prefix = (string) $request->get_param('prefix');
+        if ($prefix !== '' && preg_match('#(^/)|(\\\\)|(\.\.)|(\x00)#', $prefix)) {
+            return new \WP_Error('ferry_bad_prefix', 'Invalid manifest prefix.', ['status' => 400]);
+        }
         $after = max(0, (int) $request->get_param('after'));
-        $result = Manifest::batch(untrailingslashit(ABSPATH), $after, new Budget());
+        $result = Manifest::batch(untrailingslashit(ABSPATH), $after, new Budget(), 5000, $scope, $prefix);
         $response = new \WP_REST_Response(['files' => $result['files']]);
         $response->header('X-Complete', $result['complete'] ? '1' : '0');
         $response->header('X-Next-Index', (string) $result['next']);
@@ -137,7 +145,7 @@ final class Routes
                 continue;
             }
             $resolved_rel = str_replace(DIRECTORY_SEPARATOR, '/', substr($abs, strlen($root) + 1));
-            if (Excludes::excluded($resolved_rel) || !is_file($abs)) {
+            if ((Excludes::excluded($resolved_rel) && !Excludes::allowed_upload($resolved_rel)) || !is_file($abs)) {
                 $skipped[] = $relpath;
                 $done++;
                 continue;
@@ -177,7 +185,7 @@ final class Routes
             exit;
         }
         $resolved_rel = str_replace(DIRECTORY_SEPARATOR, '/', substr($abs, strlen($root) + 1));
-        if (Excludes::excluded($resolved_rel) || !is_file($abs)) {
+        if ((Excludes::excluded($resolved_rel) && !Excludes::allowed_upload($resolved_rel)) || !is_file($abs)) {
             status_header(404);
             exit;
         }
