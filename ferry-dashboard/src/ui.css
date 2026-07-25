@@ -102,3 +102,23 @@ a:hover { color: oklch(0.44 0.16 262); }
 .auth-panel__sub { font-size: 13px; color: var(--muted); margin-bottom: 22px; }
 .auth-panel__switch { text-align: center; font-size: 12.5px; color: var(--muted); margin-top: 20px; }
 .auth-panel__switch button { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+.empty { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 32px; }
+.empty__inner { text-align: center; max-width: 420px; }
+.empty__placeholder {
+  height: 150px; border-radius: 12px; border: 1px dashed var(--border-strong);
+  background: repeating-linear-gradient(45deg, var(--surface-2), var(--surface-2) 10px, var(--panel) 10px, var(--panel) 20px);
+  display: flex; align-items: center; justify-content: center; margin-bottom: 24px;
+  font-size: 12px; color: var(--faint);
+}
+.empty__inner h2 { font-size: 18px; letter-spacing: -0.01em; margin-bottom: 8px; }
+.empty__inner p { color: var(--muted); font-size: 13.5px; margin-bottom: 22px; text-wrap: pretty; }
+.site-list { padding: 24px 28px; display: flex; flex-direction: column; gap: 12px; }
+.site-row { border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; display: flex; align-items: center; gap: 16px; background: var(--surface); }
+.site-row--refused { border: 1px dashed var(--red); background: var(--red-weak); }
+.site-row__avatar { width: 40px; height: 40px; border-radius: 10px; background: var(--accent-weak); color: var(--accent-ink); display: flex; align-items: center; justify-content: center; font-weight: 600; flex: none; }
+.site-row__avatar--refused { background: var(--surface); color: var(--red); font-size: 18px; }
+.site-row__text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.site-row__name { font-weight: 600; font-size: 15px; }
+.site-row__sub { font-size: 12px; color: var(--faint); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.site-row__sub--refused { color: var(--red); }
+.chip--syncing::before { border: 2px solid var(--accent); border-top-color: transparent; background: none; width: 8px; height: 8px; animation: spin 0.8s linear infinite; }

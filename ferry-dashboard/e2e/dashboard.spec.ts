@@ -23,3 +23,10 @@ test('a wrong password shows an inline error', async ({ page }) => {
   await expect(page.locator('.form-error')).toContainText('Wrong email or password.');
   await expect(page).toHaveURL('/login');
 });
+
+test('a fresh account sees the empty sites state', async ({ page }) => {
+  await signUp(page);
+  await expect(page.getByText('Connect your first WordPress site')).toBeVisible();
+  await expect(page.getByText('no connected sites')).toBeVisible();
+  await expect(page.getByText('0 sites')).toBeVisible();
+});
