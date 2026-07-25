@@ -1,4 +1,4 @@
-import { request } from 'undici';
+import { Agent, interceptors, request } from 'undici';
 
 export interface WporgEndpoints { api: string; downloads: string }
 
@@ -27,13 +27,15 @@ export function themeZipUrl(ep: WporgEndpoints, slug: string, version: string): 
 
 const ATTEMPTS = 2; // §8: wp.org failures cost seconds, not minutes - one retry, then unavailable
 
+const redirectAgent = new Agent().compose(interceptors.redirect({ maxRedirections: 3 }));
+
 async function fetchBuffer(url: string, timeoutMs: number): Promise<Buffer | null> {
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const res = await request(url, { signal: controller.signal });
+        const res = await request(url, { signal: controller.signal, dispatcher: redirectAgent });
         const buf = Buffer.from(await res.body.arrayBuffer());
         if (res.statusCode === 200) return buf;
         if (res.statusCode === 404) return null; // definitive: not on wp.org - retrying won't help
