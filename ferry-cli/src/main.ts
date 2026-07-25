@@ -33,6 +33,9 @@ program
       `  Committed production snapshot ${result.commit.slice(0, 7)}` +
         (result.neutralizedRepos > 0 ? ` (${result.neutralizedRepos} nested repo(s) neutralized)` : ''),
     );
+    console.log(`  Files: ${result.provenance.reused} reused, ${result.provenance.reconstructed} reconstructed, ${result.provenance.fetched} fetched`);
+    console.log(`  Provenance: ${result.provenance.summary}`);
+    console.log(`    Report: ${result.provenance.reportPath}`);
     if (result.skipped.length > 0) {
       console.log(`  Skipped ${result.skipped.length} unreadable file(s): ${result.skipped.slice(0, 5).join(', ')}${result.skipped.length > 5 ? ', ...' : ''}`);
     }

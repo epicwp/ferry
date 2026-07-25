@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,7 +7,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CloneEnv } from '../src/env/ddev.js';
 import { saveProfile, type SiteInfo } from '../src/profile.js';
 import { pull } from '../src/pull.js';
-import { startMockPlugin, sizeOf, type MockPlugin } from './helpers/mockPlugin.js';
+import { hashOf, startMockPlugin, sizeOf, type MockPlugin } from './helpers/mockPlugin.js';
+import { startMockWporg, zipOf, type MockWporg } from './helpers/mockWporg.js';
+
+const DEAD_WPORG = { api: 'http://127.0.0.1:1', downloads: 'http://127.0.0.1:1' };
 
 class FakeEnv implements CloneEnv {
   calls: string[] = [];
@@ -89,10 +93,14 @@ describe('pull', () => {
     });
     pair(mock.base);
     const env = new FakeEnv();
-    const result = await pull('fixture', { env });
+    const result = await pull('fixture', { env, wporg: DEAD_WPORG });
 
     expect(result.url).toBe('https://fixture.ddev.site');
     expect(result.adminPassword).toBe('pw123');
+    expect(result.provenance.fetched).toBe(5);
+    expect(result.provenance.reused).toBe(0);
+    expect(result.provenance.reconstructed).toBe(0);
+    expect(existsSync(join(home, 'sites/fixture/provenance.json'))).toBe(true);
     expect(env.calls).toEqual(['provision', 'importDb', 'createAdmin']);
     expect(env.wpConfigPresentAtImport).toBe(true);
     expect(readFileSync(join(clonePath, 'index.php'), 'utf8')).toBe('<?php // wp');
@@ -130,5 +138,60 @@ describe('pull', () => {
     const env = new FakeEnv();
     await expect(pull('fixture', { env })).rejects.toThrowError(/[Mm]ultisite/);
     expect(env.calls).toEqual([]);
+  });
+
+  it('reconstructs wp.org-matched files, fetches unique ones, reports tampering, and re-pull reuses', async () => {
+    // fixture: one core file matching official checksums, one tampered core file, one unique file
+    mkdirSync(join(fixture, 'wp-includes'), { recursive: true });
+    writeFileSync(join(fixture, 'wp-includes/functions.php'), '<?php // official-functions');
+    writeFileSync(join(fixture, 'wp-includes/version.php'), '<?php // TAMPERED');
+    const officialVersion = '<?php // official-version';
+    const wporg = await startMockWporg({
+      checksums: { '6.5-en_US': {
+        'wp-includes/functions.php': createHash('md5').update('<?php // official-functions').digest('hex'),
+        'wp-includes/version.php': createHash('md5').update(officialVersion).digest('hex'),
+      } },
+      zips: { '/release/wordpress-6.5.zip': zipOf('wordpress', {
+        'wp-includes/functions.php': '<?php // official-functions',
+        'wp-includes/version.php': officialVersion,
+      }) },
+    });
+    try {
+      const paths = ['index.php', 'wp-includes/functions.php', 'wp-includes/version.php'];
+      const manifest = paths.map((p) => ({ path: p, size: sizeOf(fixture, p), hash: hashOf(fixture, p) }));
+      mock = await startMockPlugin(fixture, {
+        info: siteInfo({ locale: 'en_US' }),
+        manifest,
+        dbTables: [{
+          name: 'wp_options', rows: 1, bytes: 10, pk: 'option_id', maxpk: 1,
+          batches: [{ sql: 'INSERT INTO `wp_options` VALUES (1);\n', lastKey: 1, complete: true }],
+        }],
+      });
+      pair(mock.base);
+      const result = await pull('fixture', { env: new FakeEnv(), wporg: wporg.endpoints });
+
+      // functions.php was reconstructed from wp.org - never crossed the bridge
+      const bridged = mock.requests.files.flat();
+      expect(bridged).not.toContain('wp-includes/functions.php');
+      expect(bridged).toContain('index.php');                 // unique (not in checksums)
+      expect(bridged).toContain('wp-includes/version.php');   // tampered → mirror production's bytes
+      expect(result.provenance.reconstructed).toBe(1);
+      expect(readFileSync(join(clonePath, 'wp-includes/version.php'), 'utf8')).toBe('<?php // TAMPERED');
+
+      // the report flags the tampering
+      const report = JSON.parse(readFileSync(result.provenance.reportPath, 'utf8'));
+      const core = report.verified.find((p: { type: string }) => p.type === 'core');
+      expect(core.modified).toEqual(['wp-includes/version.php']);
+      expect(result.provenance.summary).toContain('1 modified core file');
+
+      // warm re-pull of the unchanged site: everything reuses, nothing crosses the bridge
+      const before = mock.requests.files.length;
+      const again = await pull('fixture', { env: new FakeEnv(), wporg: wporg.endpoints });
+      expect(again.provenance.reused).toBe(3);
+      expect(again.provenance.fetched).toBe(0);
+      expect(mock.requests.files.length).toBe(before);
+    } finally {
+      wporg.close();
+    }
   });
 });
