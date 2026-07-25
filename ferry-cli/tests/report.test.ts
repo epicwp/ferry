@@ -69,4 +69,37 @@ describe('report', () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it('bundled themes: files matching core checksums are not reported as modified', () => {
+    // Bundled themes (e.g., twentytwentythree) ship with the core release but may have
+    // different bytes than their standalone zips on downloads.wordpress.org
+    const report = buildReport([
+      {
+        ref: { type: 'core', slug: 'core', version: '6.8.2', locale: 'en_US' },
+        checksums: {
+          'wp-includes/version.php': 'core-version-hash',
+          'wp-content/themes/twentytwentythree/style.css': 'CORE-BUNDLED-MD5', // bundled with core
+        },
+        entries: [
+          { relPath: 'wp-includes/version.php', hash: 'core-version-hash' },
+          { relPath: 'wp-content/themes/twentytwentythree/style.css', hash: 'CORE-BUNDLED-MD5' },
+        ],
+      },
+      {
+        ref: { type: 'theme', slug: 'twentytwentythree', version: '1.1' },
+        checksums: {
+          'style.css': 'STANDALONE-MD5', // standalone zip has different checksum
+          'readme.txt': 'readme-hash',
+        },
+        entries: [
+          { relPath: 'style.css', hash: 'CORE-BUNDLED-MD5' }, // matches core release, not standalone
+          { relPath: 'readme.txt', hash: 'GENUINELY-MODIFIED' }, // different from both
+        ],
+      },
+    ], []);
+    const theme = report.verified[1];
+    // style.css matches core checksum → NOT modified, even though it differs from standalone
+    expect(theme.modified).toEqual(['readme.txt']);
+    expect(theme.missing).toEqual([]);
+  });
 });

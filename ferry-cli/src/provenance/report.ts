@@ -23,8 +23,15 @@ export interface ProvenanceReport {
 // outside wp-content/ (the API list bundles akismet/twenty* - wp-content is
 // judged by its own packages); extra is core-only and restricted to wp-admin//
 // wp-includes/, the classic malware drop location. null hashes are never judged.
+// Bundled packages (themes/plugins shipped with core) match against core checksums
+// to account for bytes differences between core release and standalone zips.
 export function buildReport(evidence: PackageEvidence[], unverified: UnverifiedPackage[]): ProvenanceReport {
   const verified: PackageReport[] = [];
+
+  // Extract core checksums for bundled package verification (bundled themes/plugins
+  // ship with the core release and may have different bytes than their standalone zips)
+  const coreSums = evidence.find((ev) => ev.ref.type === 'core')?.checksums ?? {};
+
   for (const ev of evidence) {
     const isCore = ev.ref.type === 'core';
     const official = Object.keys(ev.checksums).filter((p) => !isCore || !p.startsWith('wp-content/'));
@@ -32,7 +39,19 @@ export function buildReport(evidence: PackageEvidence[], unverified: UnverifiedP
     const present = new Map(ev.entries.map((e) => [e.relPath, e.hash]));
     const modified = official.filter((p) => {
       const hash = present.get(p);
-      return hash !== undefined && hash !== null && hash !== ev.checksums[p];
+      if (hash === undefined || hash === null || hash === ev.checksums[p]) {
+        return false;
+      }
+      // For non-core packages, exclude files matching core-bundled checksums.
+      // A file matching the core release's official checksum is authentic core-bundled bytes,
+      // even when the standalone package zip differs.
+      if (!isCore) {
+        const fullPath = `wp-content/${ev.ref.type}s/${ev.ref.slug}/${p}`;
+        if (coreSums[fullPath] === hash) {
+          return false;
+        }
+      }
+      return true;
     });
     const missing = official.filter((p) => !present.has(p));
     const extra = isCore
