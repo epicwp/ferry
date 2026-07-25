@@ -25,7 +25,7 @@ export async function pullDatabase(
   const tables = data.tables as TableInfo[];
   const parts: string[] = [];
   for (const [i, table] of tables.entries()) {
-    onTable?.(i, tables.length, table.name);
+    onTable?.(i + 1, tables.length, table.name);
     const file = join(dumpDir, `${table.name}.sql`);
     await fsp.writeFile(file, '');
     let after = 0;
