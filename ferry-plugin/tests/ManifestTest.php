@@ -30,7 +30,8 @@ final class ManifestTest extends TestCase
         $paths = array_column($result['files'], 'path');
         $this->assertSame(['index.php', 'wp-content/themes/t/style.css'], $paths);
         $this->assertSame(6, $result['files'][1]['size']);
-        $this->assertNull($result['files'][1]['hash']);
+        $this->assertSame(md5('body{}'), $result['files'][1]['hash']);
+        $this->assertSame(md5_file($this->root . '/index.php'), $result['files'][0]['hash']);
         $this->assertTrue($result['complete']);
         $this->assertSame(2, $result['next']);
     }
@@ -46,6 +47,7 @@ final class ManifestTest extends TestCase
             array_column($second['files'], 'path')
         );
         $this->assertSame(['index.php', 'wp-content/themes/t/style.css'], $all);
+        $this->assertSame(md5('body{}'), $second['files'][0]['hash'], 'resumed batches must carry hashes too');
         $third = Manifest::batch($this->root, $second['next'], new Budget(10.0), 1);
         $this->assertSame([], $third['files']);
         $this->assertTrue($third['complete']);
@@ -56,5 +58,16 @@ final class ManifestTest extends TestCase
         $result = Manifest::batch($this->root, 0, new Budget(0.0));
         $this->assertCount(1, $result['files'], 'must emit at least one entry per request');
         $this->assertFalse($result['complete']);
+    }
+
+    public function test_unreadable_file_yields_null_hash(): void
+    {
+        if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
+            $this->markTestSkipped('root reads chmod-0000 files');
+        }
+        chmod($this->root . '/index.php', 0000);
+        $result = Manifest::batch($this->root, 0, new Budget(10.0));
+        $this->assertNull($result['files'][0]['hash']);
+        chmod($this->root . '/index.php', 0644);
     }
 }
