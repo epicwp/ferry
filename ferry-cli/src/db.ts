@@ -14,12 +14,18 @@ export interface TableInfo {
 /** Lite-pull rule names; must stay in sync with the plugin's DbExcludes::NAMES. */
 export const LITE_SKIP = ['revisions', 'transients', 'sessions', 'as_logs', 'as_completed'];
 
-export async function pullDatabase(client: FerryClient, dumpDir: string, skip: string[] = []): Promise<string> {
+export async function pullDatabase(
+  client: FerryClient,
+  dumpDir: string,
+  skip: string[] = [],
+  onTable?: (done: number, total: number, name: string) => void,
+): Promise<string> {
   await fsp.mkdir(dumpDir, { recursive: true });
   const { data } = await client.getJson('/ferry/v1/db/tables');
   const tables = data.tables as TableInfo[];
   const parts: string[] = [];
-  for (const table of tables) {
+  for (const [i, table] of tables.entries()) {
+    onTable?.(i, tables.length, table.name);
     const file = join(dumpDir, `${table.name}.sql`);
     await fsp.writeFile(file, '');
     let after = 0;

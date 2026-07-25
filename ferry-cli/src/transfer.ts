@@ -141,14 +141,31 @@ export async function fetchAll(
   client: FerryClient,
   entries: import('./client.js').ManifestEntry[],
   destDir: string,
-  opts: { maxBytes?: number; concurrency?: number } = {},
+  opts: { maxBytes?: number; concurrency?: number; onProgress?: (done: number, total: number) => void } = {},
 ): Promise<{ skipped: string[] }> {
   const { batches, oversized } = binPack(entries, opts.maxBytes ?? DEFAULT_BATCH_BYTES);
   const limit = pLimit(opts.concurrency ?? 4); // §3.4: more collides with per-account PHP process caps
+  const total = entries.length;
+  let done = 0;
   const skippedLists = await Promise.all(
-    batches.map((b) => limit(() => fetchBatch(client, b.map((e) => e.path), destDir))),
+    batches.map((b) =>
+      limit(async () => {
+        const skipped = await fetchBatch(client, b.map((e) => e.path), destDir);
+        done += b.length;
+        opts.onProgress?.(done, total);
+        return skipped;
+      }),
+    ),
   );
-  await Promise.all(oversized.map((e) => limit(() => fetchOversized(client, e, destDir))));
+  await Promise.all(
+    oversized.map((e) =>
+      limit(async () => {
+        await fetchOversized(client, e, destDir);
+        done += 1;
+        opts.onProgress?.(done, total);
+      }),
+    ),
+  );
   return { skipped: skippedLists.flat() };
 }
 
