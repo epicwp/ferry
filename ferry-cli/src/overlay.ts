@@ -2,7 +2,13 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, renameSync, rmSync } from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { SiteInfo } from './profile.js';
+
+/** Absolute path to a bundled PHP asset; resolves from src/ and dist/ alike. */
+export function assetPath(name: string): string {
+  return fileURLToPath(new URL(`../assets/${name}`, import.meta.url));
+}
 
 // Constants that must not carry over: DB credentials are DDEV's, cache/cron
 // are forced off by the harness, path/URL constants point into production, and
