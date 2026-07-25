@@ -49,6 +49,16 @@ function ferry_fallback_remote_url($origin, $rel)
     return $origin . '/wp-content/uploads/' . implode('/', array_map('rawurlencode', explode('/', $rel)));
 }
 
+/** True if a raw response header line is a Content-Length that exceeds $cap. Lets the
+ *  transfer be aborted from the header callback, before any body bytes are buffered. */
+function ferry_fallback_content_length_too_big($header, $cap)
+{
+    if (preg_match('/^content-length:\s*(\d+)/i', trim($header), $m)) {
+        return (int) $m[1] > $cap;
+    }
+    return false;
+}
+
 if (defined('FERRY_FALLBACK_TEST')) {
     return; // loaded for unit tests: definitions only
 }
@@ -62,11 +72,19 @@ if (!ferry_fallback_valid_path($rel)) {
 $dest = __DIR__ . '/wp-content/uploads/' . $rel;
 $remote = ferry_fallback_remote_url($origin, $rel);
 if (!is_file($dest)) {
-    if (!is_dir(dirname($dest))) {
-        mkdir(dirname($dest), 0775, true);
+    $dir = dirname($dest);
+    // @-suppressed + is_dir() re-check: concurrent first-loads of the same new
+    // directory must degrade to the 302 floor, not a "File exists" warning in the response.
+    if (!@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        header('Location: ' . $remote, true, 302);
+        exit;
     }
     $tmp = $dest . '.ferry-tmp-' . getmypid();
     $out = fopen($tmp, 'wb');
+    if ($out === false) {
+        header('Location: ' . $remote, true, 302);
+        exit;
+    }
     $too_big = false;
     $bytes = 0;
     $ch = curl_init($remote);
@@ -75,20 +93,27 @@ if (!is_file($dest)) {
         CURLOPT_MAXREDIRS      => 3,
         CURLOPT_CONNECTTIMEOUT => 10,
         CURLOPT_TIMEOUT        => 120,
+        CURLOPT_HEADERFUNCTION => function ($ch, $header) use (&$too_big) {
+            if (ferry_fallback_content_length_too_big($header, FERRY_UPLOADS_CAP_BYTES)) {
+                $too_big = true;
+                return 0; // any length mismatch aborts the transfer before the body lands
+            }
+            return strlen($header);
+        },
         CURLOPT_WRITEFUNCTION  => function ($ch, $data) use ($out, &$too_big, &$bytes) {
             $bytes += strlen($data);
             if ($bytes > FERRY_UPLOADS_CAP_BYTES) {
                 $too_big = true;
-                return 0; // aborts the transfer
+                return 0; // aborts the transfer: backstop for chunked/missing Content-Length
             }
             return fwrite($out, $data);
         },
     ]);
-    curl_exec($ch);
+    $ok = curl_exec($ch);
     $code = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
     curl_close($ch);
     fclose($out);
-    if ($too_big || $code !== 200) {
+    if ($ok === false || $too_big || $code !== 200) {
         @unlink($tmp);
         header('Location: ' . $remote, true, 302); // today's behavior is the floor
         exit;

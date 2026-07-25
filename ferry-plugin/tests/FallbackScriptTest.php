@@ -46,4 +46,15 @@ final class FallbackScriptTest extends TestCase
             ferry_fallback_remote_url('https://prod.example', '2026/07/my file.jpg')
         );
     }
+
+    public function test_content_length_header_cap(): void
+    {
+        $this->assertTrue(ferry_fallback_content_length_too_big("Content-Length: 200\r\n", 100));
+        $this->assertFalse(ferry_fallback_content_length_too_big("Content-Length: 100\r\n", 100));
+        $this->assertFalse(ferry_fallback_content_length_too_big("Content-Length: 50\r\n", 100));
+        $this->assertTrue(ferry_fallback_content_length_too_big("content-length: 200\r\n", 100), 'must be case-insensitive');
+        $this->assertFalse(ferry_fallback_content_length_too_big("Content-Type: text/plain\r\n", 100));
+        $this->assertFalse(ferry_fallback_content_length_too_big("HTTP/1.1 200 OK\r\n", 100));
+        $this->assertFalse(ferry_fallback_content_length_too_big("\r\n", 100));
+    }
 }
