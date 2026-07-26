@@ -44,40 +44,67 @@ final class Paths
         if (strpos($relpath, "\0") !== false || strpos($relpath, '\\') !== false || strpos($relpath, '/') === 0) {
             return 'denied_path';
         }
-        $relpath = rtrim($relpath, '/');
-        if ($relpath === '' || in_array('..', explode('/', $relpath), true)) {
-            return 'denied_path';
-        }
 
-        $dir = dirname($root . '/' . $relpath);
-        $resolved_dir = realpath($dir);
-        while ($resolved_dir === false) {
-            $parent = dirname($dir);
-            if ($parent === $dir) {
-                return 'denied_path'; // walked to filesystem root without finding an existing ancestor
+        // Canonicalize lexically before ANY denylist check runs: dot segments and
+        // doubled separators must not let a protected path alias past a literal
+        // prefix/substring match. ".." is rejected outright rather than resolved -
+        // realpath isn't safe here since the target may not exist yet.
+        $segments = [];
+        foreach (explode('/', $relpath) as $segment) {
+            if ($segment === '' || $segment === '.') {
+                continue;
             }
-            $dir = $parent;
-            $resolved_dir = realpath($dir);
+            if ($segment === '..') {
+                return 'denied_path';
+            }
+            $segments[] = $segment;
         }
-        if ($resolved_dir !== $root && strpos($resolved_dir, $root . DIRECTORY_SEPARATOR) !== 0) {
+        if ($segments === []) {
             return 'denied_path';
         }
+        $normalized = implode('/', $segments);
 
-        if (stripos(basename($relpath), 'wp-config') === 0) {
-            return 'denied_path';
-        }
-        foreach (self::SELF_PLUGIN_DIRS as $prefix) {
-            if (strpos($relpath, $prefix) === 0) {
+        $abs = $root . '/' . $normalized;
+        $existing = realpath($abs);
+        if ($existing !== false) {
+            // Target already exists (e.g. overwriting a theme file) - an existing
+            // symlink LEAF pointing outside $root must be refused too, not just
+            // its containing directory.
+            if ($existing !== $root && strpos($existing, $root . DIRECTORY_SEPARATOR) !== 0) {
+                return 'denied_path';
+            }
+        } else {
+            $dir = dirname($abs);
+            $resolved_dir = realpath($dir);
+            while ($resolved_dir === false) {
+                $parent = dirname($dir);
+                if ($parent === $dir) {
+                    return 'denied_path'; // walked to filesystem root without finding an existing ancestor
+                }
+                $dir = $parent;
+                $resolved_dir = realpath($dir);
+            }
+            if ($resolved_dir !== $root && strpos($resolved_dir, $root . DIRECTORY_SEPARATOR) !== 0) {
                 return 'denied_path';
             }
         }
-        if (strpos($relpath, '.ferry-staging') !== false || strpos($relpath, '.ferry-backup') !== false) {
+
+        if (stripos(basename($normalized), 'wp-config') === 0) {
             return 'denied_path';
         }
-        if (strpos($relpath, 'wp-content/mu-plugins/ferry-') === 0) {
+        $normalized_lower = strtolower($normalized);
+        foreach (self::SELF_PLUGIN_DIRS as $prefix) {
+            if (strpos($normalized_lower, strtolower($prefix)) === 0) {
+                return 'denied_path';
+            }
+        }
+        if (strpos($normalized, '.ferry-staging') !== false || strpos($normalized, '.ferry-backup') !== false) {
             return 'denied_path';
         }
-        if (Excludes::excluded($relpath)) {
+        if (strpos($normalized_lower, 'wp-content/mu-plugins/ferry-') === 0) {
+            return 'denied_path';
+        }
+        if (Excludes::excluded($normalized)) {
             return 'denied_path';
         }
 

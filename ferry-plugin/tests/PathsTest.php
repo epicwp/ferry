@@ -119,4 +119,33 @@ final class PathsTest extends TestCase
         // (wp-content/themes) must still be walked up to and found under $root.
         $this->assertNull(Paths::check_write($this->root, 'wp-content/themes/new-theme/deep/file.php'));
     }
+
+    // ---- review findings: denylist must run on the canonicalized path, and an
+    // existing symlink LEAF must be containment-checked, not just its ancestor ----
+
+    public function test_write_denied_dot_segment_alias_of_self_plugin_dir(): void
+    {
+        $this->assertNotNull(Paths::check_write($this->root, 'wp-content/plugins/./ferry-connect/backdoor.php'));
+    }
+
+    public function test_write_denied_doubled_slash_alias_of_self_plugin_dir(): void
+    {
+        $this->assertNotNull(Paths::check_write($this->root, 'wp-content//plugins/ferry-connect/backdoor.php'));
+    }
+
+    public function test_write_denied_mixed_case_self_plugin_dir(): void
+    {
+        $this->assertNotNull(Paths::check_write($this->root, 'Wp-Content/Plugins/Ferry-Connect/x.php'));
+    }
+
+    public function test_write_denied_dot_segment_alias_of_mu_plugins(): void
+    {
+        $this->assertNotNull(Paths::check_write($this->root, 'wp-content/mu-plugins/./ferry-overlay.php'));
+    }
+
+    public function test_write_denied_symlink_leaf_outside_root(): void
+    {
+        symlink('/etc/hosts', $this->root . '/wp-content/themes/t/evil-link.php');
+        $this->assertNotNull(Paths::check_write($this->root, 'wp-content/themes/t/evil-link.php'));
+    }
 }
