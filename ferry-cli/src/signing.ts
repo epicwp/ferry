@@ -10,12 +10,13 @@ export function canonical(
   query: Record<string, string>,
   body: string,
   timestamp: number,
+  nonce: string,
 ): string {
   const pairs = Object.keys(query)
     .filter((k) => k !== 'rest_route' && k !== '_locale')
     .sort()
     .map((k) => `${rfc3986(k)}=${rfc3986(query[k])}`);
-  return `${method.toUpperCase()}\n${route}\n${pairs.join('&')}\n${body}\n${timestamp}`;
+  return `${method.toUpperCase()}\n${route}\n${pairs.join('&')}\n${body}\n${timestamp}\n${nonce}`;
 }
 
 export function sign(
@@ -25,8 +26,9 @@ export function sign(
   query: Record<string, string>,
   body: string,
   timestamp: number,
+  nonce: string,
 ): string {
   return createHmac('sha256', secret)
-    .update(canonical(method, route, query, body, timestamp))
+    .update(canonical(method, route, query, body, timestamp, nonce))
     .digest('hex');
 }

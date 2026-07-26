@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import type { IncomingHttpHeaders } from 'node:http';
 import { Readable } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -81,6 +82,7 @@ export class FerryClient {
     let lastError: unknown;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const timestamp = Math.floor((Date.now() + this.clockOffsetMs) / 1000);
+      const nonce = randomBytes(16).toString('hex'); // fresh per attempt: a retried request must not replay its own nonce
       const url = new URL(`/wp-json${route}`, this.baseUrl);
       for (const [k, v] of Object.entries(query)) {
         url.searchParams.set(k, v);
@@ -93,7 +95,8 @@ export class FerryClient {
           headers: {
             ...(body === '' ? {} : { 'content-type': 'application/json' }),
             'x-ferry-timestamp': String(timestamp),
-            'x-ferry-signature': sign(this.secret, method, route, query, body, timestamp),
+            'x-ferry-nonce': nonce,
+            'x-ferry-signature': sign(this.secret, method, route, query, body, timestamp, nonce),
           },
         });
       } catch (err) {
