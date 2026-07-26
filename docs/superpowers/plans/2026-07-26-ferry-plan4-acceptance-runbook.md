@@ -22,5 +22,10 @@ Optional caps for the run: `FERRY_AGENT_MAX_BUDGET_USD=2`.
 5. Restart the ferry-server dev process mid-session; send a follow-up message —
    the session resumes with context intact.
 6. Press "New session" — thread clears; a fresh question starts clean.
+7. Cost-semantics check: in the same session, send a second message after the first turn
+   completes, then compare the two `turn_end` events' `totalCostUsd` in `agent_events` (DB
+   or SSE stream). If the second value includes the first (i.e. it's cumulative rather than
+   per-turn), record that in the PR description — the design doc's SUM-over-events cost rule
+   must become MAX-per-session before anything bills on it.
 
 Record the observed total cost for the session in the PR description.
