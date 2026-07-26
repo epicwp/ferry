@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ddevConfig, majorMinor } from '../src/env/ddev.js';
+import { BINLOG_CNF, ddevConfig, majorMinor } from '../src/env/ddev.js';
 import type { SiteInfo } from '../src/profile.js';
 
 const info = (over: Partial<SiteInfo> = {}): SiteInfo => ({
@@ -36,5 +36,19 @@ describe('ddevConfig', () => {
 
   it('maps apache to apache-fpm', () => {
     expect(ddevConfig(info({ server: 'apache' }), 'x')).toContain('webserver_type: apache-fpm');
+  });
+});
+
+describe('BINLOG_CNF', () => {
+  it('matches the Task 1 pins doc verbatim', () => {
+    expect(BINLOG_CNF).toBe([
+      '[mysqld]',
+      'log-bin=ferry-bin',
+      'binlog-format=ROW',
+      'binlog-row-image=FULL',
+      'server-id=1',
+      'expire-logs-days=14',
+      '',
+    ].join('\n'));
   });
 });

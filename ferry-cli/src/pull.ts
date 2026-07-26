@@ -100,6 +100,8 @@ export async function pull(slug: string, deps: PullDeps = {}, opts: PullOpts = {
 
   await envReady;                                         // join (§4.6)
   await env.importDb(docroot, dump);
+  profile.binlog = await env.binlogPosition(docroot);      // journal window starts here (Task 10)
+  saveProfile(profile);
   const admin = await env.createAdmin(docroot);
   progress({ phase: 'done' });
   return {
