@@ -30,7 +30,9 @@ export async function siteContext(
   ]);
   const files = nameStatus === '' ? [] : nameStatus.split('\n').slice(0, 20).map((line) => {
     const [status = '', ...rest] = line.split('\t');
-    return { status, path: rest.join('\t') };
+    const isRenameOrCopy = status.startsWith('R') || status.startsWith('C');
+    const path = isRenameOrCopy ? rest[rest.length - 1]! : rest.join('\t');
+    return { status, path };
   });
   let environment: AgentContext['environment'] = {};
   try {

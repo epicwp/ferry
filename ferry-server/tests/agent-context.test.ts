@@ -53,4 +53,14 @@ describe('siteContext', () => {
     const ctx = await siteContext('s', dir, () => ({}));
     expect(ctx.environment).toEqual({});
   });
+
+  it('handles renamed files correctly (destination path only)', async () => {
+    const dir = makeClone();
+    await ensureAgentBranch(dir);
+    git(dir, 'mv', 'functions.php', 'helpers.php');
+    git(dir, 'commit', '-m', 'rename');
+    const ctx = await siteContext('s', dir, profileFn);
+    expect(ctx.files).toEqual([{ status: expect.stringMatching(/^R/) as string, path: 'helpers.php' }]);
+    expect(ctx.files[0]!.path).not.toContain('\t');
+  });
 });
