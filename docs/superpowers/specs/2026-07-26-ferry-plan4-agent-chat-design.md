@@ -103,6 +103,9 @@ Nothing else in v1. No write/bridge tools until Plan 5.
 - Sync keeps committing pulls to `production`; `git diff production` on the clone remains
   "exactly what the agent changed". Topical branches (`agent/vat-fix`) are Plan 5 territory
   (change cards own naming then).
+- Honest caveat: once a post-agent sync moves `production` forward, `git diff production`
+  includes that divergence too (not just the agent's changes) until Plan 5 rebases
+  `agent/work` or otherwise reconciles it.
 
 ## Data model (SQLite, `store.ts`)
 
@@ -121,8 +124,8 @@ Persisted event types (also the SSE wire shape):
 | `agent_text` | `{text}` | complete assistant text block |
 | `tool_use` | `{toolUseId, name, input}` (input truncated for display) | assistant `tool_use` block |
 | `tool_result` | `{toolUseId, output, isError}` (output truncated) | `tool_result` block |
-| `turn_end` | `{subtype, totalCostUsd, usage, numTurns, durationMs}` | SDK `result` message |
-| `status` | `{state, detail?}` | manager (running/idle/error, budget hit, resume, new session) |
+| `turn_end` | `{subtype, totalCostUsd, inputTokens, outputTokens, numTurns, durationMs}` | SDK `result` message |
+| `status` | `{state, detail?}` | manager — emitted only for the new-session notice and error; no separate running/idle/budget/resume states are emitted in v1 |
 
 SSE-only, never persisted: `text_delta` `{text}` (token streaming for the in-flight
 assistant block; the following `agent_text` event is the authoritative text).
