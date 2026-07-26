@@ -10,8 +10,8 @@ export function agentRoutes(app: FastifyInstance, deps: AppDeps, agents: AgentMa
   app.post('/api/sites/:id/agent/messages', { preHandler: app.requireUser }, async (request, reply) => {
     const site = deps.store.siteFor(request.user.id, Number((request.params as { id: string }).id));
     if (!site) return reply.code(404).send({ error: 'Site not found.' });
-    if (site.status !== 'ready') return reply.code(409).send({ error: 'Sync the site first.' });
     if (sync.isRunning(site.id)) return reply.code(409).send({ error: 'A sync is running for this site.' });
+    if (site.status !== 'ready') return reply.code(409).send({ error: 'Sync the site first.' });
     const text = String((request.body as { text?: unknown } | undefined)?.text ?? '').trim();
     if (text === '' || text.length > MESSAGE_MAX) {
       return reply.code(400).send({ error: `Message must be 1–${MESSAGE_MAX} characters.` });

@@ -108,6 +108,35 @@ describe('agent routes', () => {
     expect(syncStart.statusCode).toBe(202);
     const msgWhileSync = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/agent/messages`, headers: { cookie }, payload: { text: 'b' } });
     expect(msgWhileSync.statusCode).toBe(409);
+    expect((msgWhileSync.json() as { error: string }).error).toBe('A sync is running for this site.');
     releasePull();
+  });
+
+  it('streams live events over SSE, each exactly once, including a text_delta', async () => {
+    const { app, store } = makeApp({ engine: stubEngine(), agent: agentDeps(scriptedRunner()) });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    // Open the SSE connection BEFORE any message exists, so what follows exercises the
+    // live subscribe path (not the persisted-history replay path).
+    const res = await app.inject({
+      method: 'GET', url: `/api/sites/${site.id}/agent/events?after=0`, headers: { cookie },
+      payloadAsStream: true,
+    });
+    const chunks: Buffer[] = [];
+    const stream = res.stream();
+    stream.on('data', (c: Buffer) => chunks.push(c));
+    await app.inject({
+      method: 'POST', url: `/api/sites/${site.id}/agent/messages`, headers: { cookie },
+      payload: { text: 'a' },
+    });
+    await new Promise((r) => setTimeout(r, 150)); // scripted turn completes
+    stream.destroy();
+    const events = sseEvents(Buffer.concat(chunks).toString('utf8'));
+    const seqs = events.filter((e) => e.seq !== undefined).map((e) => e.seq);
+    expect(new Set(seqs).size).toBe(seqs.length); // no duplicates
+    for (const type of ['user', 'tool_use', 'tool_result', 'agent_text', 'turn_end']) {
+      expect(events.filter((e) => e.type === type)).toHaveLength(1); // each live event exactly once
+    }
+    expect(events.some((e) => e.type === 'text_delta' && e.seq === undefined)).toBe(true);
   });
 });
