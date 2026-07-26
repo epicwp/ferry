@@ -1,9 +1,32 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { scriptedRunner } from '../src/agent/scripted-runner.js';
 import type { AgentWireEvent } from '../src/agent/types.js';
 import { agentDeps, makeApp, signup, stubEngine } from './helpers/testApp.js';
 
 type TestApp = ReturnType<typeof makeApp>;
+
+function git(dir: string, ...args: string[]): string {
+  return execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
+}
+
+/** A clone on agent/work, optionally with an uncommitted change (Finding 2: dirty-worktree gate). */
+function makeAgentClone(dirty: boolean): string {
+  const dir = mkdtempSync(join(tmpdir(), 'ferry-sync-agent-'));
+  git(dir, 'init', '-b', 'production');
+  git(dir, 'config', 'user.email', 't@t.t');
+  git(dir, 'config', 'user.name', 't');
+  writeFileSync(join(dir, 'index.php'), '<?php // wp');
+  git(dir, 'add', '.');
+  git(dir, 'commit', '-m', 'pull');
+  git(dir, 'branch', 'agent/work');
+  git(dir, 'checkout', 'agent/work');
+  if (dirty) writeFileSync(join(dir, 'fix.php'), '<?php // wip');
+  return dir;
+}
 
 async function readySite(app: TestApp['app'], cookie: string, store: TestApp['store']) {
   const res = await app.inject({
@@ -110,6 +133,27 @@ describe('agent routes', () => {
     expect(msgWhileSync.statusCode).toBe(409);
     expect((msgWhileSync.json() as { error: string }).error).toBe('A sync is running for this site.');
     releasePull();
+  });
+
+  it('refuses to sync when the agent clone has uncommitted work on agent/work', async () => {
+    const dir = makeAgentClone(true);
+    const engine = stubEngine({ pull: async () => ({ url: 'https://x.ddev.site' } as never), verifyClone: async () => true });
+    const { app, store } = makeApp({ engine, agent: { ...agentDeps(scriptedRunner()), cloneDir: () => dir } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/sync`, headers: { cookie } });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('The agent has uncommitted work — ask it to commit, or start a new session first.');
+  });
+
+  it('allows sync when the agent clone is clean', async () => {
+    const dir = makeAgentClone(false);
+    const engine = stubEngine({ pull: async () => ({ url: 'https://x.ddev.site' } as never), verifyClone: async () => true });
+    const { app, store } = makeApp({ engine, agent: { ...agentDeps(scriptedRunner()), cloneDir: () => dir } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/sync`, headers: { cookie } });
+    expect(res.statusCode).toBe(202);
   });
 
   it('streams live events over SSE, each exactly once, including a text_delta', async () => {

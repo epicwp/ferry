@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ensureAgentBranch } from '../src/agent/branch.js';
+import { ensureAgentBranch, hasUncommittedAgentWork } from '../src/agent/branch.js';
 
 function git(dir: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
@@ -45,5 +45,29 @@ describe('ensureAgentBranch', () => {
     git(dir, 'checkout', 'production'); // a sync leaves the tree here
     await ensureAgentBranch(dir);
     expect(git(dir, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('agent/work');
+  });
+});
+
+describe('hasUncommittedAgentWork', () => {
+  it('is false when agent/work does not exist yet', async () => {
+    const dir = makeClone();
+    expect(await hasUncommittedAgentWork(dir)).toBe(false);
+  });
+
+  it('is false when agent/work exists and the tree is clean', async () => {
+    const dir = makeClone();
+    await ensureAgentBranch(dir);
+    expect(await hasUncommittedAgentWork(dir)).toBe(false);
+  });
+
+  it('is true when agent/work exists and the tree has uncommitted changes', async () => {
+    const dir = makeClone();
+    await ensureAgentBranch(dir);
+    writeFileSync(join(dir, 'fix.php'), '<?php // wip');
+    expect(await hasUncommittedAgentWork(dir)).toBe(true);
+  });
+
+  it('tolerates a missing/non-git clone dir', async () => {
+    expect(await hasUncommittedAgentWork('/no/such/ferry-clone-dir')).toBe(false);
   });
 });

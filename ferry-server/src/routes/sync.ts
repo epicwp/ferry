@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { AppDeps } from '../app.js';
+import { hasUncommittedAgentWork } from '../agent/branch.js';
 import type { AgentManager } from '../agent/manager.js';
 import type { SyncManager } from '../sync.js';
 
@@ -12,6 +13,9 @@ export function syncRoutes(app: FastifyInstance, deps: AppDeps, sync: SyncManage
     }
     if (agents?.isActive(site.id)) {
       return reply.code(409).send({ error: 'The agent is working on this site — finish or start a new session first.' });
+    }
+    if (deps.agent && await hasUncommittedAgentWork(deps.agent.cloneDir(site.slug))) {
+      return reply.code(409).send({ error: 'The agent has uncommitted work — ask it to commit, or start a new session first.' });
     }
     try {
       sync.start(site);
