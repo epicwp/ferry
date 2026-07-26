@@ -132,13 +132,6 @@ export class Store {
     this.db.close();
   }
 
-  indexExists(name: string): boolean {
-    const result = this.db.prepare(
-      "SELECT 1 FROM sqlite_master WHERE type='index' AND name = ?"
-    ).get(name);
-    return !!result;
-  }
-
   createUser(email: string, passwordHash: string): User | undefined {
     try {
       const info = this.db

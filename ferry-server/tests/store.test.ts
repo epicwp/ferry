@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
 import { Store } from '../src/store.js';
 
 describe('Store', () => {
@@ -75,6 +76,11 @@ describe('Store', () => {
   });
 
   it('creates the agent_events session_id index on fresh database', () => {
-    expect(store.indexExists('idx_agent_events_session')).toBe(true);
+    const db = new Database(join(dir, 'server.db'));
+    const result = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_agent_events_session'"
+    ).all();
+    db.close();
+    expect(result).toHaveLength(1);
   });
 });
