@@ -12,6 +12,8 @@ final class FakeWpdb
     public $queries = [];
     /** In-memory options table, keyed by option_name (mirrors the real UNIQUE index). */
     public $options = [];
+    /** Mirrors real wpdb's public $prefix - Commit reads $wpdb->prefix directly. */
+    public $prefix = 'wp_';
 
     /** @var int|null 0-indexed call count into query(); when set, that specific call
      *  returns false instead of the default 0, simulating a failed statement (real

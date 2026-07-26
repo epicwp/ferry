@@ -15,6 +15,10 @@ final class Routes
             ['GET',  '/manifest',  'manifest'],
             ['POST', '/files',     'files'],
             ['POST', '/stage',     'stage'],
+            ['POST', '/commit',    'commit'],
+            ['POST', '/rollback',  'rollback'],
+            ['POST', '/hashes',    'hashes'],
+            ['GET',  '/tx',        'tx'],
             ['GET',  '/db/tables', 'db_tables'],
             ['GET',  '/db',        'db_export'],
         ];
@@ -83,6 +87,76 @@ final class Routes
             return new \WP_Error($result['error'], 'Invalid or malformed transaction id.', ['status' => 400]);
         }
         return $result;
+    }
+
+    /** §8: the commit sequence - atomic rename swap + DB transaction, all or nothing. */
+    public static function commit(\WP_REST_Request $request)
+    {
+        if (is_multisite()) {
+            return new \WP_Error('ferry_multisite', 'Multisite is not supported. Ferry refuses multisite installs by design.', ['status' => 409]);
+        }
+        $params = $request->get_json_params();
+        $txid = (string) ($params['txid'] ?? '');
+        $files = (isset($params['files']) && is_array($params['files'])) ? $params['files'] : [];
+        $ops = (isset($params['ops']) && is_array($params['ops'])) ? $params['ops'] : [];
+        $preconditions = (isset($params['preconditions']) && is_array($params['preconditions'])) ? $params['preconditions'] : [];
+        $force = !empty($params['force']);
+        $root = realpath(untrailingslashit(ABSPATH));
+        global $wpdb;
+        $result = Commit::run($root, $wpdb, $txid, $files, $ops, $preconditions, $force);
+        Tx::prune($root, time());
+        if (isset($result['error'])) {
+            return new \WP_Error($result['error'], 'Too many files in a single commit.', ['status' => 400]);
+        }
+        return $result;
+    }
+
+    /** §8: CAS-guarded restore from the backup dir, plus the inverse DB transaction. */
+    public static function rollback(\WP_REST_Request $request)
+    {
+        if (is_multisite()) {
+            return new \WP_Error('ferry_multisite', 'Multisite is not supported. Ferry refuses multisite installs by design.', ['status' => 409]);
+        }
+        $params = $request->get_json_params();
+        $txid = (string) ($params['txid'] ?? '');
+        $ops = (isset($params['ops']) && is_array($params['ops'])) ? $params['ops'] : [];
+        $root = realpath(untrailingslashit(ABSPATH));
+        global $wpdb;
+        return Commit::rollback($root, $wpdb, $txid, $ops);
+    }
+
+    /** §8: cheap targeted drift preview - no full manifest walk. */
+    public static function hashes(\WP_REST_Request $request)
+    {
+        if (is_multisite()) {
+            return new \WP_Error('ferry_multisite', 'Multisite is not supported. Ferry refuses multisite installs by design.', ['status' => 409]);
+        }
+        $params = $request->get_json_params();
+        $paths = (isset($params['paths']) && is_array($params['paths'])) ? $params['paths'] : [];
+        $root = realpath(untrailingslashit(ABSPATH));
+        $hashes = [];
+        foreach ($paths as $path) {
+            $resolved = Paths::resolve_read($root, (string) $path);
+            $hashes[(string) $path] = $resolved === null ? null : hash_file('sha256', $root . '/' . $resolved);
+        }
+        return ['hashes' => $hashes];
+    }
+
+    /** §8: tx status - a record stuck at "committing" reads as "dirty" (see Tx::read). */
+    public static function tx(\WP_REST_Request $request)
+    {
+        if (is_multisite()) {
+            return new \WP_Error('ferry_multisite', 'Multisite is not supported. Ferry refuses multisite installs by design.', ['status' => 409]);
+        }
+        $txid = (string) $request->get_param('txid');
+        $root = realpath(untrailingslashit(ABSPATH));
+        Tx::prune($root, time());
+        $meta = Tx::read($root, $txid);
+        $response = ['status' => $meta['status'] ?? 'unknown'];
+        if (isset($meta['committed_at'])) {
+            $response['committed_at'] = $meta['committed_at'];
+        }
+        return $response;
     }
 
     public static function info()
