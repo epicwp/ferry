@@ -50,6 +50,8 @@ export function agentRoutes(app: FastifyInstance, deps: AppDeps, agents: AgentMa
       'cache-control': 'no-cache',
       connection: 'keep-alive',
     });
+    reply.raw.flushHeaders(); // a fresh session has no backlog to write immediately — flush now so the
+    // browser's EventSource fires 'open' right away instead of waiting on the first event or heartbeat.
     const send = (e: AgentWireEvent): void => { reply.raw.write(`data: ${JSON.stringify(e)}\n\n`); };
 
     // Subscribe first and buffer, then replay the store, then flush — no gap, no duplicates.
