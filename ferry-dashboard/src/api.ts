@@ -26,6 +26,13 @@ export interface SyncState {
 
 export interface TestResult { wp: string; php: string; db: string; server: string }
 
+export interface AgentWireEvent { seq?: number; type: string; payload: Record<string, unknown> }
+export interface AgentContext {
+  branch: string; baseCommit: string; shortstat: string;
+  files: { status: string; path: string }[];
+  environment: { wp?: string; php?: string; db?: string; webServer?: string };
+}
+
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
@@ -48,3 +55,12 @@ export const api = {
   get: <T>(path: string) => call<T>('GET', path),
   post: <T>(path: string, body?: unknown) => call<T>('POST', path, body),
 };
+
+export const agentHistory = (siteId: number, after = 0) =>
+  call<{ sessionId: number | null; events: AgentWireEvent[] }>('GET', `/api/sites/${siteId}/agent/history?after=${after}`);
+export const agentSend = (siteId: number, text: string) =>
+  call<{ queued: boolean }>('POST', `/api/sites/${siteId}/agent/messages`, { text });
+export const agentNewSession = (siteId: number) =>
+  call<{ created: boolean }>('POST', `/api/sites/${siteId}/agent/sessions`);
+export const agentContext = (siteId: number) =>
+  call<AgentContext>('GET', `/api/sites/${siteId}/agent/context`);
