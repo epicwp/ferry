@@ -52,6 +52,7 @@ The base doc's walking skeleton (§4): `ferry link` + `ferry pull` → an airtig
 ## Plan 6 — production isolation & scale (deliberately last)
 
 - Firecracker microVM per site (provider choice still open by design), egress closed at VM level, transparent stub proxy (WireMock/VCR pattern; blocked+logged = stub backlog)
+- Re-enable the agent's web tools (WebSearch/WebFetch) once the agent runs inside the VM with proxied egress — kept off in Plan 4 because web content is a prompt-injection vector while the agent holds a host shell (decision 2026-07-26; the product needs web tools eventually)
 - DB refresh via block fingerprints (pt-table-checksum pattern) + WP-hook journal as first-line signal; Merkle tree for file change detection; warm standby
 - Billing, audit log, monitoring, onboarding (spec §15 — open points, decide then)
 

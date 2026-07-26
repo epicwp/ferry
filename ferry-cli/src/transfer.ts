@@ -1,6 +1,6 @@
 import type { ManifestEntry } from './client.js';
 import { createWriteStream, promises as fsp } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { finished, pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';

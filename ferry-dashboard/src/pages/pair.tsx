@@ -40,6 +40,7 @@ export function PairPage() {
         <form onSubmit={submit}>
           <input
             className="input mono pair-panel__code"
+            aria-label="Pairing code"
             value={code}
             onChange={(e) => setCode(e.target.value.toUpperCase())}
             placeholder="XXXX-XXXX"

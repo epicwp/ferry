@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildApp } from '../../ferry-server/src/app.js';
+import { ensureAgentBranch } from '../../ferry-server/src/agent/branch.js';
+import { scriptedRunner } from '../../ferry-server/src/agent/scripted-runner.js';
 import { realEngine } from '../../ferry-server/src/engine.js';
 import { buildPluginZip } from '../../ferry-server/src/plugin-zip.js';
 import { Store } from '../../ferry-server/src/store.js';
@@ -15,6 +17,19 @@ if (!process.env.NODE_EXTRA_CA_CERTS) {
 const store = new Store(join(process.env.FERRY_HOME, 'server.db'));
 const pluginDir = fileURLToPath(new URL('../../ferry-plugin', import.meta.url));
 const distDir = fileURLToPath(new URL('../dist', import.meta.url));
-const app = buildApp({ store, engine: realEngine(), pluginZip: buildPluginZip(pluginDir), staticDir: distDir });
+const app = buildApp({
+  store,
+  engine: realEngine(),
+  pluginZip: buildPluginZip(pluginDir),
+  staticDir: distDir,
+  // The chat e2e uses the scripted runner (no tokens spent); ensureBranch is real —
+  // the happy-path sync produces a real clone with a production branch.
+  agent: {
+    runner: scriptedRunner(),
+    cloneDir: (slug: string) => join(process.env.FERRY_HOME!, 'clones', slug),
+    ensureBranch: ensureAgentBranch,
+    idleMs: 60_000,
+  },
+});
 await app.listen({ port: 4173, host: '127.0.0.1' });
 console.log(`dashboard e2e server on http://127.0.0.1:4173 (FERRY_HOME=${process.env.FERRY_HOME})`);

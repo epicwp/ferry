@@ -26,6 +26,7 @@ export function timeAgo(iso: string | null): string | null {
 function targetFor(site: Site): string {
   if (site.status === 'new') return `/sites/${site.id}/install`;
   if (site.status === 'refused_multisite') return `/sites/${site.id}/pair`;
+  if (site.status === 'ready') return `/sites/${site.id}`;
   return `/sites/${site.id}/sync`;
 }
 
