@@ -335,4 +335,107 @@ final class DbOpsTest extends TestCase
         $this->assertSame('x', $entries[0]['expected']);
         $this->assertStringContainsString('FOR UPDATE', $entries[0]['sql']);
     }
+
+    // ---- fix round 1: literal values must flow through $wpdb->prepare(), never hand-escaped ----
+
+    public function test_read_set_option_name_is_a_placeholder_not_an_inline_literal(): void
+    {
+        // Multi-byte-bypass-shaped payload: a hand-rolled backslash-doubling escaper can be
+        // defeated by charset-aware clients (GBK/Big5) that consume the escaping backslash as
+        // half of a multi-byte lead byte, letting the trailing quote close the string early.
+        $adversarial = "foo\xbf' OR '1'='1";
+
+        $entries = DbOps::read_set([
+            ['kind' => 'option_set', 'name' => $adversarial, 'old' => null, 'new' => 'v'],
+        ], [], 'wp_');
+
+        $this->assertCount(1, $entries);
+        // The raw value must never be concatenated into the SQL text - only a placeholder.
+        $this->assertStringNotContainsString($adversarial, $entries[0]['sql']);
+        $this->assertStringContainsString('%s', $entries[0]['sql']);
+        $this->assertSame([$adversarial], $entries[0]['args']);
+    }
+
+    public function test_read_set_postmeta_key_is_a_placeholder_not_an_inline_literal(): void
+    {
+        $adversarial = "k\xbf'; DROP TABLE wp_postmeta; --";
+
+        $entries = DbOps::read_set([
+            ['kind' => 'postmeta_set', 'postId' => 1, 'key' => $adversarial, 'old' => null, 'new' => 'v'],
+        ], [], 'wp_');
+
+        $this->assertStringNotContainsString($adversarial, $entries[0]['sql']);
+        $this->assertSame([1, $adversarial], $entries[0]['args']);
+    }
+
+    // ---- fix round 1: a failing apply statement must roll back, not commit a partial write ----
+
+    public function test_apply_failure_rolls_back_and_reports_failure_without_committing(): void
+    {
+        $ops = [
+            ['kind' => 'option_set', 'name' => 'ferry_a', 'old' => '1', 'new' => '2'],
+            ['kind' => 'option_set', 'name' => 'ferry_b', 'old' => '5', 'new' => '6'],
+            ['kind' => 'option_set', 'name' => 'ferry_c', 'old' => '7', 'new' => '8'],
+        ];
+        $wpdb = new FakeWpdb([
+            ['option_value' => '1'],
+            ['option_value' => '5'],
+            ['option_value' => '7'],
+        ]);
+        // query() call order: 0=START TRANSACTION, 1=ferry_a UPDATE (ok), 2=ferry_b UPDATE (fails).
+        $wpdb->fail_query_at_call = 2;
+
+        $result = DbOps::apply_in_transaction($wpdb, $ops, [], 'wp_', false);
+
+        $this->assertFalse($result['committed']);
+        $this->assertSame([], $result['conflicts']);
+        $this->assertSame(['key' => 'option:ferry_b', 'detail' => 'option_set apply failed'], $result['apply_error']);
+
+        // ferry_a applied, ferry_b was attempted (and its query() call was scripted to
+        // fail), ferry_c's UPDATE must never have been attempted at all - the apply loop
+        // stops immediately. (ferry_c's read-set SELECT still ran: all locks are taken
+        // upfront, per spec §9, before any apply.)
+        $updates = array_values(array_filter($wpdb->queries, function ($q) {
+            return strpos($q, 'UPDATE wp_options SET') === 0;
+        }));
+        $this->assertCount(2, $updates);
+        $this->assertStringContainsString('ferry_a', $updates[0]);
+        $this->assertStringContainsString('ferry_b', $updates[1]);
+        $this->assertNotContains('COMMIT', $wpdb->queries);
+        $this->assertSame('ROLLBACK', end($wpdb->queries));
+    }
+
+    // ---- fix round 1: null in a row op's `new` must render as SQL NULL, not '' ----
+
+    public function test_row_update_null_value_renders_as_sql_null(): void
+    {
+        $ops = [
+            ['kind' => 'row_update', 'table' => 'wp_my_plugin_settings', 'pkCol' => 'id', 'pk' => 5, 'old' => ['id' => '5', 'val' => 'x'], 'new' => ['id' => '5', 'val' => null]],
+        ];
+        $wpdb = new FakeWpdb([
+            ['id' => '5', 'val' => 'x'],
+        ]);
+
+        $result = DbOps::apply_in_transaction($wpdb, $ops, [], 'wp_', false);
+
+        $this->assertTrue($result['committed']);
+        $applySql = $wpdb->queries[2];
+        $this->assertStringContainsString('`val` = NULL', $applySql);
+        $this->assertStringNotContainsString("`val` = ''", $applySql);
+    }
+
+    public function test_row_insert_null_value_renders_as_sql_null(): void
+    {
+        $ops = [
+            ['kind' => 'row_insert', 'table' => 'wp_my_plugin_settings', 'pkCol' => 'id', 'pk' => 5, 'new' => ['id' => '5', 'val' => null]],
+        ];
+        $wpdb = new FakeWpdb([null]);
+
+        $result = DbOps::apply_in_transaction($wpdb, $ops, [], 'wp_', false);
+
+        $this->assertTrue($result['committed']);
+        $applySql = $wpdb->queries[2];
+        $this->assertStringContainsString('VALUES', $applySql);
+        $this->assertMatchesRegularExpression('/,\s*NULL\)|,\s*NULL,/', $applySql);
+    }
 }

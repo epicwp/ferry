@@ -13,6 +13,13 @@ final class FakeWpdb
     /** In-memory options table, keyed by option_name (mirrors the real UNIQUE index). */
     public $options = [];
 
+    /** @var int|null 0-indexed call count into query(); when set, that specific call
+     *  returns false instead of the default 0, simulating a failed statement (real
+     *  wpdb::query() returns false on error - unique violation, NOT NULL, etc). */
+    public $fail_query_at_call = null;
+    /** @var int */
+    private $query_call_count = 0;
+
     public function __construct(array $script = [])
     {
         $this->script = $script;
@@ -33,6 +40,7 @@ final class FakeWpdb
     public function query($sql)
     {
         $this->queries[] = $sql;
+        $call = $this->query_call_count++;
         if (preg_match("/DELETE FROM \\S+ WHERE option_name LIKE '([^']*)' AND option_value < (\\d+)/", $sql, $m)) {
             $pattern = '/\A' . str_replace('%', '.*', preg_quote($m[1], '/')) . '\z/';
             $threshold = (int) $m[2];
@@ -41,6 +49,9 @@ final class FakeWpdb
                     unset($this->options[$name]);
                 }
             }
+        }
+        if ($this->fail_query_at_call === $call) {
+            return false;
         }
         return 0;
     }

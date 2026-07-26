@@ -90,16 +90,23 @@ final class DbOps
      * `file_hash` preconditions are not DB reads - they join the file drift
      * step (Task 9), not this transaction.
      *
-     * No $wpdb here by design: entries carry ready-to-run SQL text, built with
-     * manual literal/identifier quoting (see `esc`/`quote_ident`) rather than
-     * `$wpdb->prepare()`, since this method has no wpdb to call it on.
+     * No $wpdb here by design, but every literal value still passes through
+     * `$wpdb->prepare()` - just not in this method. Each entry's `sql` is a
+     * template with `%s`/`%d` placeholders for literal values (never a
+     * hand-escaped literal concatenated into the string); `args` carries the
+     * literal values in placeholder order. `apply_in_transaction` - which does
+     * have `$wpdb` - resolves each entry via `$wpdb->prepare($entry['sql'], ...$entry['args'])`
+     * immediately before executing it, so every literal gets wpdb's real,
+     * charset-aware escaping. Identifiers (table/column names) have no
+     * placeholder syntax in SQL, so those are still baked into `sql` directly
+     * via `quote_ident`.
      *
      * Each entry also carries an internal `whole` flag (beyond the documented
      * {sql,key,expected} shape) used only by `apply_in_transaction` to know
      * whether the query selects one column (extract the scalar) or a full row
      * via `SELECT *` (compare column-by-column) - see `apply_in_transaction`.
      *
-     * @return array{sql:string,key:string,expected:mixed,whole:bool}[]
+     * @return array{sql:string,args:array,key:string,expected:mixed,whole:bool}[]
      */
     public static function read_set(array $ops, array $preconditions, string $prefix): array
     {
@@ -110,25 +117,9 @@ final class DbOps
         foreach ($preconditions as $pre) {
             $type = isset($pre['type']) ? $pre['type'] : null;
             if ($type === 'option') {
-                $name = (string) $pre['name'];
-                $entries[] = [
-                    'sql' => "SELECT option_value FROM " . $prefix . "options WHERE option_name = " . self::esc($name) . " LIMIT 1 FOR UPDATE",
-                    'key' => 'option:' . $name,
-                    'expected' => $pre['expected'],
-                    'whole' => false,
-                ];
+                $entries[] = self::option_entry((string) $pre['name'], $prefix, $pre['expected']);
             } elseif ($type === 'row') {
-                $table = (string) $pre['table'];
-                $pkCol = (string) $pre['pkCol'];
-                $pk = (int) $pre['pk'];
-                $col = (string) $pre['column'];
-                $entries[] = [
-                    'sql' => "SELECT " . self::quote_ident($col) . " FROM " . self::quote_ident($table)
-                        . " WHERE " . self::quote_ident($pkCol) . " = {$pk} LIMIT 1 FOR UPDATE",
-                    'key' => "row:{$table}:{$pkCol}={$pk}:{$col}",
-                    'expected' => $pre['expected'],
-                    'whole' => false,
-                ];
+                $entries[] = self::row_column_entry((string) $pre['table'], (string) $pre['pkCol'], (int) $pre['pk'], (string) $pre['column'], $pre['expected']);
             }
             // 'file_hash' intentionally not handled here.
         }
@@ -140,32 +131,17 @@ final class DbOps
         switch ($op['kind']) {
             case 'option_set':
             case 'option_delete':
-                $name = (string) $op['name'];
-                return [
-                    'sql' => "SELECT option_value FROM " . $prefix . "options WHERE option_name = " . self::esc($name) . " LIMIT 1 FOR UPDATE",
-                    'key' => 'option:' . $name,
-                    'expected' => $op['old'],
-                    'whole' => false,
-                ];
+                return self::option_entry((string) $op['name'], $prefix, $op['old']);
             case 'postmeta_set':
             case 'postmeta_delete':
-                $postId = (int) $op['postId'];
-                $key = (string) $op['key'];
-                // A (post_id, meta_key) pair is not unique in wp_postmeta - multiple rows
-                // can share it. This targets a single row (LIMIT 1); which row is undefined
-                // without an ORDER BY. Matches the op's own semantics: it operates on one row.
-                return [
-                    'sql' => "SELECT meta_value FROM " . $prefix . "postmeta WHERE post_id = {$postId} AND meta_key = " . self::esc($key) . " LIMIT 1 FOR UPDATE",
-                    'key' => "postmeta:{$postId}:{$key}",
-                    'expected' => $op['old'],
-                    'whole' => false,
-                ];
+                return self::postmeta_entry((int) $op['postId'], (string) $op['key'], $prefix, $op['old']);
             default: // row_update / row_insert / row_delete
                 $table = (string) $op['table'];
                 $pkCol = (string) $op['pkCol'];
                 $pk = (int) $op['pk'];
                 return [
-                    'sql' => "SELECT * FROM " . self::quote_ident($table) . " WHERE " . self::quote_ident($pkCol) . " = {$pk} FOR UPDATE",
+                    'sql' => "SELECT * FROM " . self::quote_ident($table) . " WHERE " . self::quote_ident($pkCol) . " = %d FOR UPDATE",
+                    'args' => [$pk],
                     'key' => "row:{$table}:{$pkCol}={$pk}",
                     'expected' => $op['kind'] === 'row_insert' ? null : $op['old'], // absent-row semantics: row_insert must find nothing
                     'whole' => true,
@@ -173,10 +149,41 @@ final class DbOps
         }
     }
 
-    /** MySQL string literal, manually escaped (no $wpdb available in read_set - see class doc). */
-    private static function esc(string $value): string
+    private static function option_entry(string $name, string $prefix, $expected): array
     {
-        return "'" . str_replace(['\\', "'"], ['\\\\', "\\'"], $value) . "'";
+        return [
+            'sql' => "SELECT option_value FROM " . $prefix . "options WHERE option_name = %s LIMIT 1 FOR UPDATE",
+            'args' => [$name],
+            'key' => 'option:' . $name,
+            'expected' => $expected,
+            'whole' => false,
+        ];
+    }
+
+    private static function postmeta_entry(int $postId, string $key, string $prefix, $expected): array
+    {
+        // A (post_id, meta_key) pair is not unique in wp_postmeta - multiple rows
+        // can share it. This targets a single row (LIMIT 1); which row is undefined
+        // without an ORDER BY. Matches the op's own semantics: it operates on one row.
+        return [
+            'sql' => "SELECT meta_value FROM " . $prefix . "postmeta WHERE post_id = %d AND meta_key = %s LIMIT 1 FOR UPDATE",
+            'args' => [$postId, $key],
+            'key' => "postmeta:{$postId}:{$key}",
+            'expected' => $expected,
+            'whole' => false,
+        ];
+    }
+
+    private static function row_column_entry(string $table, string $pkCol, int $pk, string $column, $expected): array
+    {
+        return [
+            'sql' => "SELECT " . self::quote_ident($column) . " FROM " . self::quote_ident($table)
+                . " WHERE " . self::quote_ident($pkCol) . " = %d LIMIT 1 FOR UPDATE",
+            'args' => [$pk],
+            'key' => "row:{$table}:{$pkCol}={$pk}:{$column}",
+            'expected' => $expected,
+            'whole' => false,
+        ];
     }
 
     /** Backtick-quoted identifier (table/column names sourced from op/precondition data). */
@@ -190,9 +197,13 @@ final class DbOps
      * read-set row (always - locks are taken even under $force) -> compare
      * found vs expected (skipped under $force) -> any mismatch: ROLLBACK,
      * return every conflict (never stop at the first) -> all match: apply
-     * each op, COMMIT.
+     * each op; if any apply statement fails (InnoDB fails only that
+     * statement, e.g. a unique violation or NOT NULL/strict-mode error - it
+     * does not abort the transaction on its own), ROLLBACK immediately and
+     * report a distinct `apply_error` instead of committing a partial write;
+     * else COMMIT.
      *
-     * @return array{committed:bool, conflicts: array{key:string,expected:mixed,found:mixed}[]}
+     * @return array{committed:bool, conflicts: array{key:string,expected:mixed,found:mixed}[], apply_error?: array{key:string,detail:string}}
      */
     public static function apply_in_transaction($wpdb, array $ops, array $preconditions, string $prefix, bool $force): array
     {
@@ -202,7 +213,7 @@ final class DbOps
 
         $conflicts = [];
         foreach ($entries as $entry) {
-            $row = $wpdb->get_row($entry['sql'], ARRAY_A);
+            $row = $wpdb->get_row($wpdb->prepare($entry['sql'], ...$entry['args']), ARRAY_A);
             if ($force) {
                 continue; // still locked above; compare intentionally skipped
             }
@@ -218,11 +229,28 @@ final class DbOps
         }
 
         foreach ($ops as $op) {
-            self::apply($wpdb, $op, $prefix);
+            if (self::apply($wpdb, $op, $prefix) === false) {
+                $wpdb->query('ROLLBACK');
+                return ['committed' => false, 'conflicts' => [], 'apply_error' => ['key' => self::label($op), 'detail' => $op['kind'] . ' apply failed']];
+            }
         }
 
         $wpdb->query('COMMIT');
         return ['committed' => true, 'conflicts' => []];
+    }
+
+    private static function label(array $op): string
+    {
+        switch ($op['kind']) {
+            case 'option_set':
+            case 'option_delete':
+                return 'option:' . $op['name'];
+            case 'postmeta_set':
+            case 'postmeta_delete':
+                return 'postmeta:' . $op['postId'] . ':' . $op['key'];
+            default:
+                return 'row:' . $op['table'] . ':' . $op['pkCol'] . '=' . $op['pk'];
+        }
     }
 
     private static function values_match($expected, $found): bool
@@ -241,77 +269,79 @@ final class DbOps
         return $expected === $found;
     }
 
-    private static function apply($wpdb, array $op, string $prefix): void
+    /** @return mixed the underlying $wpdb->query() result (false on failure - checked by the caller) */
+    private static function apply($wpdb, array $op, string $prefix)
     {
         switch ($op['kind']) {
             case 'option_set':
                 if ($op['old'] === null) {
-                    $wpdb->query($wpdb->prepare(
+                    return $wpdb->query($wpdb->prepare(
                         "INSERT INTO " . $prefix . "options (option_name, option_value, autoload) VALUES (%s, %s, 'yes')",
                         $op['name'], $op['new']
                     ));
-                } else {
-                    $wpdb->query($wpdb->prepare(
-                        "UPDATE " . $prefix . "options SET option_value = %s WHERE option_name = %s",
-                        $op['new'], $op['name']
-                    ));
                 }
-                return;
+                return $wpdb->query($wpdb->prepare(
+                    "UPDATE " . $prefix . "options SET option_value = %s WHERE option_name = %s",
+                    $op['new'], $op['name']
+                ));
             case 'option_delete':
-                $wpdb->query($wpdb->prepare(
+                return $wpdb->query($wpdb->prepare(
                     "DELETE FROM " . $prefix . "options WHERE option_name = %s",
                     $op['name']
                 ));
-                return;
             case 'postmeta_set':
                 if ($op['old'] === null) {
-                    $wpdb->query($wpdb->prepare(
+                    return $wpdb->query($wpdb->prepare(
                         "INSERT INTO " . $prefix . "postmeta (post_id, meta_key, meta_value) VALUES (%d, %s, %s)",
                         $op['postId'], $op['key'], $op['new']
                     ));
-                } else {
-                    // Same multi-row caveat as the read-set query above: LIMIT 1 keeps
-                    // this scoped to a single row.
-                    $wpdb->query($wpdb->prepare(
-                        "UPDATE " . $prefix . "postmeta SET meta_value = %s WHERE post_id = %d AND meta_key = %s LIMIT 1",
-                        $op['new'], $op['postId'], $op['key']
-                    ));
                 }
-                return;
+                // Same multi-row caveat as the read-set query above: LIMIT 1 keeps
+                // this scoped to a single row.
+                return $wpdb->query($wpdb->prepare(
+                    "UPDATE " . $prefix . "postmeta SET meta_value = %s WHERE post_id = %d AND meta_key = %s LIMIT 1",
+                    $op['new'], $op['postId'], $op['key']
+                ));
             case 'postmeta_delete':
-                $wpdb->query($wpdb->prepare(
+                return $wpdb->query($wpdb->prepare(
                     "DELETE FROM " . $prefix . "postmeta WHERE post_id = %d AND meta_key = %s LIMIT 1",
                     $op['postId'], $op['key']
                 ));
-                return;
             case 'row_update':
                 $sets = [];
                 $args = [];
                 foreach ($op['new'] as $col => $val) {
-                    $sets[] = self::quote_ident($col) . ' = %s';
-                    $args[] = $val;
+                    // %s/%d render a PHP null as '' on WP < 6.2 (silent corruption on a
+                    // nullable column) - emit SQL NULL directly instead, no placeholder.
+                    if ($val === null) {
+                        $sets[] = self::quote_ident($col) . ' = NULL';
+                    } else {
+                        $sets[] = self::quote_ident($col) . ' = %s';
+                        $args[] = $val;
+                    }
                 }
                 $args[] = (int) $op['pk'];
                 $sql = "UPDATE " . self::quote_ident($op['table']) . " SET " . implode(', ', $sets)
                     . " WHERE " . self::quote_ident($op['pkCol']) . " = %d";
-                $wpdb->query($wpdb->prepare($sql, ...$args));
-                return;
+                return $wpdb->query($wpdb->prepare($sql, ...$args));
             case 'row_insert':
                 $cols = [];
                 $placeholders = [];
                 $args = [];
                 foreach ($op['new'] as $col => $val) {
                     $cols[] = self::quote_ident($col);
-                    $placeholders[] = '%s';
-                    $args[] = $val;
+                    if ($val === null) {
+                        $placeholders[] = 'NULL'; // same rationale as row_update above
+                    } else {
+                        $placeholders[] = '%s';
+                        $args[] = $val;
+                    }
                 }
                 $sql = "INSERT INTO " . self::quote_ident($op['table']) . " (" . implode(', ', $cols) . ") VALUES (" . implode(', ', $placeholders) . ")";
-                $wpdb->query($wpdb->prepare($sql, ...$args));
-                return;
+                return $wpdb->query($wpdb->prepare($sql, ...$args));
             case 'row_delete':
                 $sql = "DELETE FROM " . self::quote_ident($op['table']) . " WHERE " . self::quote_ident($op['pkCol']) . " = %d";
-                $wpdb->query($wpdb->prepare($sql, (int) $op['pk']));
-                return;
+                return $wpdb->query($wpdb->prepare($sql, (int) $op['pk']));
         }
     }
 }
