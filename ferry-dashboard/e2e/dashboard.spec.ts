@@ -130,6 +130,7 @@ test('3b gate: sign up → add site → pair → watch progress → ready in the
   // 'Agent chat' also labels the sidebar nav item, so scope to the chat header title.
   await expect(page.locator('.chat__title')).toHaveText('Agent chat');
   await expect(page.getByText('SSE live')).toBeVisible();
+  expect(await page.locator('a[href*="ddev.site"]').count()).toBe(0); // binding constraint: no clone link, ever (§1 decision)
 
   const composer = page.getByPlaceholder('Ask a follow-up or request another fix…');
   await composer.fill('Why is VAT wrong on orders above €100?');
