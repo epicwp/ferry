@@ -11,5 +11,5 @@
     "isolatedModules": true,
     "noUnusedLocals": true
   },
-  "include": ["src"]
+  "include": ["src", "e2e/**/*.ts", "playwright.config.ts"]
 }
