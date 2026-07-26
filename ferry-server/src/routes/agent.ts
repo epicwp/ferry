@@ -3,6 +3,7 @@ import type { AppDeps } from '../app.js';
 import type { AgentManager } from '../agent/manager.js';
 import type { AgentWireEvent } from '../agent/types.js';
 import type { SyncManager } from '../sync.js';
+import { siteContext } from '../agent/context.js';
 
 const MESSAGE_MAX = 4000;
 
@@ -76,5 +77,16 @@ export function agentRoutes(app: FastifyInstance, deps: AppDeps, agents: AgentMa
       clearInterval(heartbeat);
       unsubscribe();
     });
+  });
+
+  app.get('/api/sites/:id/agent/context', { preHandler: app.requireUser }, async (request, reply) => {
+    const site = deps.store.siteFor(request.user.id, Number((request.params as { id: string }).id));
+    if (!site) return reply.code(404).send({ error: 'Site not found.' });
+    if (site.status !== 'ready') return reply.code(409).send({ error: 'Sync the site first.' });
+    try {
+      return await siteContext(site.slug, deps.agent!.cloneDir(site.slug));
+    } catch (err) {
+      return reply.code(500).send({ error: 'Could not read the clone.' });
+    }
   });
 }

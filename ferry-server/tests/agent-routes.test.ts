@@ -139,4 +139,13 @@ describe('agent routes', () => {
     }
     expect(events.some((e) => e.type === 'text_delta' && e.seq === undefined)).toBe(true);
   });
+
+  it('context returns 409 for a non-ready site', async () => {
+    const { app, store } = makeApp({ engine: stubEngine(), agent: agentDeps(scriptedRunner()) });
+    const cookie = await signup(app);
+    const res0 = await app.inject({ method: 'POST', url: '/api/sites', headers: { cookie }, payload: { name: 'S', url: 'https://klant.nl' } });
+    const site = res0.json() as { id: number };
+    const res = await app.inject({ method: 'GET', url: `/api/sites/${site.id}/agent/context`, headers: { cookie } });
+    expect(res.statusCode).toBe(409);
+  });
 });
