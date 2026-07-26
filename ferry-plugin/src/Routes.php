@@ -147,18 +147,13 @@ final class Routes
                 break;
             }
             $relpath = (string) $relpath;
-            $abs = realpath($root . '/' . $relpath);
-            if ($abs === false || strpos($abs, $root . DIRECTORY_SEPARATOR) !== 0) {
+            $resolved_rel = Paths::resolve_read($root, $relpath);
+            if ($resolved_rel === null) {
                 $skipped[] = $relpath;
                 $done++;
                 continue;
             }
-            $resolved_rel = str_replace(DIRECTORY_SEPARATOR, '/', substr($abs, strlen($root) + 1));
-            if ((Excludes::excluded($resolved_rel) && !Excludes::allowed_upload($resolved_rel)) || !is_file($abs)) {
-                $skipped[] = $relpath;
-                $done++;
-                continue;
-            }
+            $abs = $root . '/' . $resolved_rel;
             $fh = fopen($abs, 'rb');
             if ($fh === false) {
                 $skipped[] = $relpath;
@@ -188,16 +183,12 @@ final class Routes
         $offset = max(0, $offset);
         $length = max(0, $length);
         $root = realpath(untrailingslashit(ABSPATH));
-        $abs = realpath($root . '/' . $relpath);
-        if ($abs === false || strpos($abs, $root . DIRECTORY_SEPARATOR) !== 0) {
+        $resolved_rel = Paths::resolve_read($root, $relpath);
+        if ($resolved_rel === null) {
             status_header(404);
             exit;
         }
-        $resolved_rel = str_replace(DIRECTORY_SEPARATOR, '/', substr($abs, strlen($root) + 1));
-        if ((Excludes::excluded($resolved_rel) && !Excludes::allowed_upload($resolved_rel)) || !is_file($abs)) {
-            status_header(404);
-            exit;
-        }
+        $abs = $root . '/' . $resolved_rel;
         while (ob_get_level()) { ob_end_clean(); }
         header('Content-Type: application/octet-stream');
         $fh = fopen($abs, 'rb');
