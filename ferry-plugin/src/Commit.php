@@ -182,10 +182,23 @@ final class Commit
      * (current target content vs what the push installed) is checked here, up front, against
      * the file list recorded by `run()` above - any mismatch refuses the whole rollback.
      *
-     * Idempotent: a file already restored (current content matches the pre-push original,
-     * `old_hash`) is treated as satisfied, not a conflict - a rollback interrupted mid-restore
-     * (crash - meta stuck at `rolling_back`) can be retried and complete rather than CAS-fail
-     * against its own prior partial progress.
+     * No reversal on a mid-rollback failure, by design - unlike `run()`'s clear-then-fill
+     * renames (backup-away, then swap-in onto a now-empty target), a restore/discard rename
+     * here lands directly onto an OCCUPIED target: `rename()` is an atomic overwrite, so the
+     * content it replaces is gone the instant it succeeds. There is no second copy to put
+     * back - "reversing" a successful restore by renaming the target away again just leaves
+     * the target with nothing at all. So on any failure (a rename fails, or the DB step
+     * fails) this simply stops where it is, leaves whatever succeeded so far exactly as it
+     * is, and leaves tx meta at `rolling_back` (reads as `dirty`) rather than writing a
+     * terminal status - a retry is the only recovery path, and it is safe because of:
+     *
+     * Idempotent, three-way CAS per file, covering every state a partial attempt can leave
+     * behind: (a) current content matches the pushed `new_hash` -> not yet restored, pending;
+     * (b) matches the pre-push `old_hash` -> already settled (restored, or - for a created
+     * file, `old_hash` is null and an absent target matches that - already discarded) ->
+     * satisfied, skip; (c) anything else -> a genuine conflict, refuses the whole rollback.
+     * A retry only ever acts on the files still in state (a), so it converges regardless of
+     * how far a prior attempt got.
      *
      * @return array{rolled_back:bool, conflicts:array, denied?:array}
      */
@@ -214,7 +227,7 @@ final class Commit
             if ($current === $f['new_hash']) {
                 $pending[] = $f; // not yet restored - needs action
             } elseif ($current === $f['old_hash']) {
-                continue; // already restored (idempotent retry) - satisfied, nothing to do
+                continue; // already settled (restored, or discarded and absent) - satisfied
             } else {
                 $conflicts[] = ['key' => $path, 'expected' => $f['new_hash'], 'found' => $current];
             }
@@ -228,68 +241,39 @@ final class Commit
         Tx::write($root, $txid, $meta);
         touch($backupDir);
 
-        $restored = [];  // existed=true: backup/files/<path> -> target
-        $discarded = []; // existed=false: target -> backup/discarded/<path>
-        $failedPath = null;
         foreach ($pending as $f) {
             $path = (string) $f['path'];
             $abs = $root . '/' . $path;
             if ($f['existed']) {
                 self::ensure_parent_dir($abs);
                 if (!@rename($backupDir . '/files/' . $path, $abs)) {
-                    $failedPath = $path;
-                    break;
+                    // Stop here, untouched: meta stays "rolling_back" (dirty) - retry it.
+                    return ['rolled_back' => false, 'conflicts' => [
+                        ['key' => $path, 'expected' => 'restorable', 'found' => 'rename_failed'],
+                    ]];
                 }
-                $restored[] = $path;
             } elseif (is_file($abs)) {
                 $discardPath = $backupDir . '/discarded/' . $path;
                 self::ensure_parent_dir($discardPath);
                 if (!@rename($abs, $discardPath)) {
-                    $failedPath = $path;
-                    break;
+                    return ['rolled_back' => false, 'conflicts' => [
+                        ['key' => $path, 'expected' => 'restorable', 'found' => 'rename_failed'],
+                    ]];
                 }
-                $discarded[] = $path;
             }
-        }
-        if ($failedPath !== null) {
-            // Reverse whatever this attempt did manage to move; meta is left at
-            // "rolling_back" (already written above) rather than reset - /tx reads that as
-            // "dirty", inviting a retry, and the idempotent CAS above makes a retry safe
-            // regardless of how much this attempt actually reversed.
-            self::undo_restore($root, $backupDir, $restored, $discarded);
-            return ['rolled_back' => false, 'conflicts' => [
-                ['key' => $failedPath, 'expected' => 'restorable', 'found' => 'rename_failed'],
-            ]];
         }
 
         $dbResult = DbOps::apply_in_transaction($wpdb, $ops, [], $wpdb->prefix, false);
         if (!$dbResult['committed']) {
-            // Best-effort, unchecked: this is the double-failure path (DB apply failed, and
-            // we're now reversing an already-successful file restore). If a reversal rename
-            // fails here too, there is no further recovery layer to fall back to - the
-            // status write below is the only signal this rollback attempt leaves behind.
-            self::undo_restore($root, $backupDir, $restored, $discarded);
-            $meta['status'] = 'committed'; // rollback did not happen - restore the prior status
-            Tx::write($root, $txid, $meta);
+            // Files are already correctly restored - that was never wrong, so it stands.
+            // Meta stays "rolling_back" (not reset to "committed"): a retry re-checks every
+            // file (all satisfied now, nothing pending) and just re-attempts the DB step.
             return ['rolled_back' => false, 'conflicts' => $dbResult['conflicts']];
         }
 
         $meta['status'] = 'rolled_back';
         Tx::write($root, $txid, $meta);
         return ['rolled_back' => true, 'conflicts' => []];
-    }
-
-    /** Reverses whatever a rollback attempt moved so far, most-recent first. Best-effort
-     *  (unchecked): called only from failure branches that already have no further recovery
-     *  to offer - the caller's own status write (or lack of one) is the actual signal. */
-    private static function undo_restore(string $root, string $backupDir, array $restored, array $discarded): void
-    {
-        foreach (array_reverse($discarded) as $path) {
-            @rename($backupDir . '/discarded/' . $path, $root . '/' . $path);
-        }
-        foreach (array_reverse($restored) as $path) {
-            @rename($root . '/' . $path, $backupDir . '/files/' . $path);
-        }
     }
 
     /** @return array<int, array{path:string, code:string}> */

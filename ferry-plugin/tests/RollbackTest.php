@@ -233,4 +233,113 @@ final class RollbackTest extends TestCase
         $this->assertSame('old content', file_get_contents($this->root . '/wp-content/themes/t/a.css'));
         $this->assertSame('rolled_back', Tx::read($this->root, $this->txid)['status']);
     }
+
+    // ---- review fix (round 4): a partial multi-file failure must not destroy an earlier restore ----
+
+    public function test_rollback_partial_failure_leaves_earlier_restores_intact_and_retry_completes(): void
+    {
+        mkdir($this->root . '/wp-content/plugins/p', 0777, true);
+        file_put_contents($this->root . '/wp-content/themes/t/a.css', 'a-original');
+        file_put_contents($this->root . '/wp-content/plugins/p/b.css', 'b-original');
+        Staging::add($this->root, $this->txid, [
+            $this->stagedFile('wp-content/themes/t/a.css', 'a-pushed'),
+            $this->stagedFile('wp-content/plugins/p/b.css', 'b-pushed'),
+        ]);
+        $files = [
+            ['path' => 'wp-content/themes/t/a.css', 'new_hash' => $this->sha('a-pushed'), 'old_hash' => $this->sha('a-original')],
+            ['path' => 'wp-content/plugins/p/b.css', 'new_hash' => $this->sha('b-pushed'), 'old_hash' => $this->sha('b-original')],
+        ];
+        $committed = Commit::run($this->root, new FakeWpdb([]), $this->txid, $files, [], [], false);
+        $this->assertTrue($committed['committed'], 'fixture setup: commit must succeed');
+
+        // f1 (a.css) restores fine; f2 (b.css)'s parent is obstructed, so its restore fails.
+        $f2Parent = $this->root . '/wp-content/plugins/p';
+        chmod($f2Parent, 0555);
+        if (is_writable($f2Parent)) {
+            chmod($f2Parent, 0777);
+            $this->markTestSkipped('running as a user that bypasses filesystem permissions (e.g. root) - chmod does not restrict writes here');
+        }
+
+        try {
+            $result = Commit::rollback($this->root, new FakeWpdb([]), $this->txid, []);
+
+            $this->assertFalse($result['rolled_back']);
+            $this->assertSame([
+                ['key' => 'wp-content/plugins/p/b.css', 'expected' => 'restorable', 'found' => 'rename_failed'],
+            ], $result['conflicts']);
+            $this->assertSame('dirty', Tx::read($this->root, $this->txid)['status']);
+
+            // f1 restored correctly - it must NOT have been reversed/destroyed because f2
+            // failed afterward. A restore rename is a one-way atomic overwrite: there is no
+            // second copy of the pushed content to put back, so undoing a successful restore
+            // would leave the target with nothing at all.
+            $this->assertSame('a-original', file_get_contents($this->root . '/wp-content/themes/t/a.css'));
+            $this->assertFileDoesNotExist(Staging::backup_dir($this->root, $this->txid) . '/files/wp-content/themes/t/a.css');
+            // f2 untouched - the failed rename touched neither its source nor its destination.
+            $this->assertSame('b-pushed', file_get_contents($this->root . '/wp-content/plugins/p/b.css'));
+        } finally {
+            chmod($f2Parent, 0777); // always restore, even if an assertion above failed
+        }
+
+        // Retry: f1 reads as already-satisfied (idempotent, matches old_hash) and is left
+        // alone; f2 is still pending (matches new_hash) and gets restored now.
+        $retry = Commit::rollback($this->root, new FakeWpdb([]), $this->txid, []);
+
+        $this->assertTrue($retry['rolled_back']);
+        $this->assertSame([], $retry['conflicts']);
+        $this->assertSame('a-original', file_get_contents($this->root . '/wp-content/themes/t/a.css'));
+        $this->assertSame('b-original', file_get_contents($this->root . '/wp-content/plugins/p/b.css'));
+        $this->assertSame('rolled_back', Tx::read($this->root, $this->txid)['status']);
+    }
+
+    // ---- review fix (round 4): a created file's already-discarded target reads as satisfied ----
+
+    public function test_rollback_partial_failure_with_a_created_file_treats_its_discard_as_satisfied_on_retry(): void
+    {
+        mkdir($this->root . '/wp-content/plugins/p', 0777, true);
+        file_put_contents($this->root . '/wp-content/plugins/p/b.css', 'b-original');
+        Staging::add($this->root, $this->txid, [
+            $this->stagedFile('wp-content/themes/t/new.css', 'created content'),
+            $this->stagedFile('wp-content/plugins/p/b.css', 'b-pushed'),
+        ]);
+        $files = [
+            ['path' => 'wp-content/themes/t/new.css', 'new_hash' => $this->sha('created content'), 'old_hash' => null],
+            ['path' => 'wp-content/plugins/p/b.css', 'new_hash' => $this->sha('b-pushed'), 'old_hash' => $this->sha('b-original')],
+        ];
+        $committed = Commit::run($this->root, new FakeWpdb([]), $this->txid, $files, [], [], false);
+        $this->assertTrue($committed['committed'], 'fixture setup: commit must succeed');
+
+        // The created file discards fine; b.css's parent is obstructed, so its restore fails
+        // right after - a genuine partial failure, not a manually-simulated crash.
+        $f2Parent = $this->root . '/wp-content/plugins/p';
+        chmod($f2Parent, 0555);
+        if (is_writable($f2Parent)) {
+            chmod($f2Parent, 0777);
+            $this->markTestSkipped('running as a user that bypasses filesystem permissions (e.g. root) - chmod does not restrict writes here');
+        }
+
+        try {
+            $result = Commit::rollback($this->root, new FakeWpdb([]), $this->txid, []);
+
+            $this->assertFalse($result['rolled_back']);
+            $this->assertSame([
+                ['key' => 'wp-content/plugins/p/b.css', 'expected' => 'restorable', 'found' => 'rename_failed'],
+            ], $result['conflicts']);
+            $this->assertFileDoesNotExist($this->root . '/wp-content/themes/t/new.css'); // discard already done
+            $this->assertSame('dirty', Tx::read($this->root, $this->txid)['status']);
+        } finally {
+            chmod($f2Parent, 0777);
+        }
+
+        // Retry: the created file's absent target must read as satisfied (old_hash is null,
+        // current is null - matches), not re-attempted and not reported as a conflict; only
+        // b.css is still pending.
+        $retry = Commit::rollback($this->root, new FakeWpdb([]), $this->txid, []);
+
+        $this->assertTrue($retry['rolled_back']);
+        $this->assertSame([], $retry['conflicts']);
+        $this->assertFileDoesNotExist($this->root . '/wp-content/themes/t/new.css');
+        $this->assertSame('b-original', file_get_contents($this->root . '/wp-content/plugins/p/b.css'));
+        $this->assertSame('rolled_back', Tx::read($this->root, $this->txid)['status']);
+    }
 }
