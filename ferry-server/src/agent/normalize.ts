@@ -14,6 +14,14 @@ function flattenResultContent(content: unknown): string {
   return '';
 }
 
+function safeStringifyInput(input: unknown): string {
+  try {
+    return JSON.stringify(input ?? {}).slice(0, TOOL_INPUT_MAX);
+  } catch {
+    return '{}';
+  }
+}
+
 /** Pure mapping from raw SDK messages to our RunnerEvent vocabulary. Field names
  *  follow docs/superpowers/specs/2026-07-26-agent-sdk-pins.md — keep in sync. */
 export function normalizeSdkMessage(msg: unknown): RunnerEvent[] {
@@ -24,27 +32,33 @@ export function normalizeSdkMessage(msg: unknown): RunnerEvent[] {
   }
   if (m.type === 'assistant') {
     const out: RunnerEvent[] = [];
-    for (const block of m.message?.content ?? []) {
-      if (block?.type === 'text' && typeof block.text === 'string' && block.text !== '') {
-        out.push({ type: 'agent_text', text: block.text });
-      } else if (block?.type === 'tool_use') {
-        out.push({
-          type: 'tool_use', toolUseId: String(block.id ?? ''), name: String(block.name ?? ''),
-          input: JSON.stringify(block.input ?? {}).slice(0, TOOL_INPUT_MAX),
-        });
+    const content = m.message?.content;
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block?.type === 'text' && typeof block.text === 'string' && block.text !== '') {
+          out.push({ type: 'agent_text', text: block.text });
+        } else if (block?.type === 'tool_use') {
+          out.push({
+            type: 'tool_use', toolUseId: String(block.id ?? ''), name: String(block.name ?? ''),
+            input: safeStringifyInput(block.input),
+          });
+        }
       }
     }
     return out;
   }
   if (m.type === 'user') {
     const out: RunnerEvent[] = [];
-    for (const block of m.message?.content ?? []) {
-      if (block?.type === 'tool_result') {
-        out.push({
-          type: 'tool_result', toolUseId: String(block.tool_use_id ?? ''),
-          output: flattenResultContent(block.content).slice(0, TOOL_OUTPUT_MAX),
-          isError: Boolean(block.is_error),
-        });
+    const content = m.message?.content;
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block?.type === 'tool_result') {
+          out.push({
+            type: 'tool_result', toolUseId: String(block.tool_use_id ?? ''),
+            output: flattenResultContent(block.content).slice(0, TOOL_OUTPUT_MAX),
+            isError: Boolean(block.is_error),
+          });
+        }
       }
     }
     return out;

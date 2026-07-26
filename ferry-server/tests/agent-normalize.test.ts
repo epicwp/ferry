@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeSdkMessage, TOOL_OUTPUT_MAX } from '../src/agent/normalize.js';
+import { normalizeSdkMessage, TOOL_OUTPUT_MAX, TOOL_INPUT_MAX } from '../src/agent/normalize.js';
 
 describe('normalizeSdkMessage', () => {
   it('maps system init to sdk_session', () => {
@@ -57,5 +57,59 @@ describe('normalizeSdkMessage', () => {
 
   it('returns [] for unknown message types', () => {
     expect(normalizeSdkMessage({ type: 'whatever' })).toEqual([]);
+  });
+
+  it('safely handles assistant with non-array content (object)', () => {
+    expect(normalizeSdkMessage({
+      type: 'assistant',
+      message: { content: {} },
+    })).toEqual([]);
+  });
+
+  it('safely handles assistant with non-array content (number)', () => {
+    expect(normalizeSdkMessage({
+      type: 'assistant',
+      message: { content: 42 },
+    })).toEqual([]);
+  });
+
+  it('safely handles user with non-array content (object)', () => {
+    expect(normalizeSdkMessage({
+      type: 'user',
+      message: { content: {} },
+    })).toEqual([]);
+  });
+
+  it('safely handles user with non-array content (number)', () => {
+    expect(normalizeSdkMessage({
+      type: 'user',
+      message: { content: 42 },
+    })).toEqual([]);
+  });
+
+  it('safely handles tool_use with circular input', () => {
+    const circular: any = { a: 1 };
+    circular.self = circular;
+    const events = normalizeSdkMessage({
+      type: 'assistant',
+      message: { content: [
+        { type: 'tool_use', id: 't1', name: 'Test', input: circular },
+      ] },
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'tool_use', toolUseId: 't1', name: 'Test' });
+    expect((events[0] as { input: string }).input).toBe('{}');
+  });
+
+  it('truncates tool input at TOOL_INPUT_MAX', () => {
+    const longStr = 'a'.repeat(TOOL_INPUT_MAX + 100);
+    const events = normalizeSdkMessage({
+      type: 'assistant',
+      message: { content: [
+        { type: 'tool_use', id: 't1', name: 'Test', input: { data: longStr } },
+      ] },
+    });
+    expect(events[0]).toMatchObject({ type: 'tool_use' });
+    expect((events[0] as { input: string }).input).toHaveLength(TOOL_INPUT_MAX);
   });
 });
