@@ -17,6 +17,25 @@ export interface Site {
   createdAt: string;
 }
 
+export type AgentSessionStatus = 'idle' | 'running' | 'error';
+
+export interface AgentSession {
+  id: number;
+  siteId: number;
+  sdkSessionId: string | null;
+  status: AgentSessionStatus;
+  createdAt: string;
+  lastActivityAt: string;
+}
+
+export interface AgentEventRow {
+  seq: number;
+  sessionId: number;
+  type: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY,
@@ -41,11 +60,43 @@ CREATE TABLE IF NOT EXISTS sites (
   verified_at TEXT,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS agent_sessions (
+  id INTEGER PRIMARY KEY,
+  site_id INTEGER NOT NULL REFERENCES sites(id),
+  sdk_session_id TEXT,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_activity_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_events (
+  id INTEGER PRIMARY KEY,
+  session_id INTEGER NOT NULL REFERENCES agent_sessions(id),
+  type TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `;
 
 interface SiteRow {
   id: number; user_id: number; name: string; url: string; slug: string; status: string;
   last_error: string | null; last_sync_at: string | null; verified_at: string | null; created_at: string;
+}
+
+interface AgentSessionRow {
+  id: number;
+  site_id: number;
+  sdk_session_id: string | null;
+  status: string;
+  created_at: string;
+  last_activity_at: string;
+}
+
+interface AgentEventRowRaw {
+  id: number;
+  session_id: number;
+  type: string;
+  payload: string;
+  created_at: string;
 }
 
 function isConstraintError(err: unknown): boolean {
@@ -57,6 +108,13 @@ function toSite(row: SiteRow): Site {
     id: row.id, userId: row.user_id, name: row.name, url: row.url, slug: row.slug,
     status: row.status as SiteStatus, lastError: row.last_error,
     lastSyncAt: row.last_sync_at, verifiedAt: row.verified_at, createdAt: row.created_at,
+  };
+}
+
+function toAgentSession(row: AgentSessionRow): AgentSession {
+  return {
+    id: row.id, siteId: row.site_id, sdkSessionId: row.sdk_session_id,
+    status: row.status as AgentSessionStatus, createdAt: row.created_at, lastActivityAt: row.last_activity_at,
   };
 }
 
@@ -155,5 +213,57 @@ export class Store {
       .prepare("UPDATE sites SET status = 'error', last_error = ? WHERE status = 'syncing'")
       .run('Sync interrupted by a server restart — run it again.');
     return info.changes;
+  }
+
+  createAgentSession(siteId: number): AgentSession {
+    const now = new Date().toISOString();
+    this.db
+      .prepare('INSERT INTO agent_sessions (site_id, status, created_at, last_activity_at) VALUES (?, ?, ?, ?)')
+      .run(siteId, 'idle', now, now);
+    return this.currentAgentSession(siteId)!;
+  }
+
+  currentAgentSession(siteId: number): AgentSession | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM agent_sessions WHERE site_id = ? ORDER BY id DESC LIMIT 1')
+      .get(siteId) as AgentSessionRow | undefined;
+    return row ? toAgentSession(row) : undefined;
+  }
+
+  setAgentSessionSdkId(id: number, sdkSessionId: string): void {
+    this.db.prepare('UPDATE agent_sessions SET sdk_session_id = ? WHERE id = ?').run(sdkSessionId, id);
+  }
+
+  setAgentSessionStatus(id: number, status: AgentSessionStatus): void {
+    this.db.prepare('UPDATE agent_sessions SET status = ? WHERE id = ?').run(status, id);
+  }
+
+  touchAgentSession(id: number): void {
+    this.db.prepare('UPDATE agent_sessions SET last_activity_at = ? WHERE id = ?').run(new Date().toISOString(), id);
+  }
+
+  appendAgentEvent(sessionId: number, type: string, payload: Record<string, unknown>): AgentEventRow {
+    const now = new Date().toISOString();
+    const info = this.db
+      .prepare('INSERT INTO agent_events (session_id, type, payload, created_at) VALUES (?, ?, ?, ?)')
+      .run(sessionId, type, JSON.stringify(payload), now);
+    return { seq: Number(info.lastInsertRowid), sessionId, type, payload, createdAt: now };
+  }
+
+  agentEventsAfter(sessionId: number, afterSeq: number): AgentEventRow[] {
+    const rows = this.db
+      .prepare('SELECT * FROM agent_events WHERE session_id = ? AND id > ? ORDER BY id')
+      .all(sessionId, afterSeq) as AgentEventRowRaw[];
+    return rows.map((r) => ({
+      seq: r.id,
+      sessionId: r.session_id,
+      type: r.type,
+      payload: JSON.parse(r.payload) as Record<string, unknown>,
+      createdAt: r.created_at,
+    }));
+  }
+
+  recoverInterruptedAgentSessions(): number {
+    return this.db.prepare("UPDATE agent_sessions SET status = 'idle' WHERE status = 'running'").run().changes;
   }
 }
