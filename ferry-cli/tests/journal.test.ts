@@ -8,12 +8,14 @@ import type { DbOp } from '../src/push-types.js';
 const FIXTURES = join(__dirname, '..', 'test-fixtures', 'binlog');
 const read = (name: string): string => readFileSync(join(FIXTURES, name), 'utf8');
 
-const columnsStub = (table: string): string[] => {
+// columns() now returns field order (for @N ordinal mapping) plus which fields SHOW COLUMNS
+// marked PRI (for pkCol resolution) - a composite key marks more than one field PRI.
+const columnsStub = (table: string): { fields: string[]; pkCols: string[] } => {
   switch (table) {
-    case 'wp_options': return ['option_id', 'option_name', 'option_value', 'autoload'];
-    case 'wp_postmeta': return ['meta_id', 'post_id', 'meta_key', 'meta_value'];
-    case 'ferry_spike_table': return ['id', 'val'];
-    default: return [];
+    case 'wp_options': return { fields: ['option_id', 'option_name', 'option_value', 'autoload'], pkCols: ['option_id'] };
+    case 'wp_postmeta': return { fields: ['meta_id', 'post_id', 'meta_key', 'meta_value'], pkCols: ['meta_id'] };
+    case 'ferry_spike_table': return { fields: ['id', 'val'], pkCols: ['id'] };
+    default: return { fields: [], pkCols: [] };
   }
 };
 
@@ -23,6 +25,7 @@ describe('parseBinlog', () => {
     expect(events).toEqual([{
       table: 'wp_options',
       kind: 'update',
+      pkCols: ['option_id'],
       before: { option_id: '506', option_name: 'ferry_spike_opt', option_value: 'hello', autoload: 'auto' },
       after: { option_id: '506', option_name: 'ferry_spike_opt', option_value: 'world', autoload: 'auto' },
     }]);
@@ -35,6 +38,7 @@ describe('parseBinlog', () => {
     expect(events[0]).toEqual({
       table: 'wp_postmeta',
       kind: 'insert',
+      pkCols: ['meta_id'],
       after: { meta_id: '13', post_id: '5', meta_key: 'ferry_spike_meta', meta_value: 'hello_meta' },
     });
   });
@@ -46,6 +50,7 @@ describe('parseBinlog', () => {
     expect(events[0]).toEqual({
       table: 'ferry_spike_table',
       kind: 'delete',
+      pkCols: ['id'],
       before: { id: '1', val: 'x' },
     });
   });
@@ -54,7 +59,7 @@ describe('parseBinlog', () => {
 describe('classify', () => {
   it('flags transient option updates as noise', () => {
     const ev = {
-      table: 'wp_options', kind: 'update' as const,
+      table: 'wp_options', kind: 'update' as const, pkCols: ['option_id'],
       before: { option_id: '1', option_name: '_transient_foo', option_value: 'a', autoload: 'no' },
       after: { option_id: '1', option_name: '_transient_foo', option_value: 'b', autoload: 'no' },
     };
@@ -65,7 +70,7 @@ describe('classify', () => {
     const names = ['_site_transient_wp_theme_files_patterns', 'cron', 'ferry_nonce_abc123'];
     for (const name of names) {
       const ev = {
-        table: 'wp_options', kind: 'update' as const,
+        table: 'wp_options', kind: 'update' as const, pkCols: ['option_id'],
         before: { option_id: '1', option_name: name, option_value: 'a', autoload: 'no' },
         after: { option_id: '1', option_name: name, option_value: 'b', autoload: 'no' },
       };
@@ -75,7 +80,7 @@ describe('classify', () => {
 
   it('refuses content tables (wp_posts)', () => {
     const ev = {
-      table: 'wp_posts', kind: 'update' as const,
+      table: 'wp_posts', kind: 'update' as const, pkCols: ['ID'],
       before: { ID: '1', post_title: 'a' },
       after: { ID: '1', post_title: 'b' },
     };
@@ -85,7 +90,7 @@ describe('classify', () => {
 
   it('refuses woocommerce_*, wc_*, and actionscheduler_* tables', () => {
     for (const table of ['wp_woocommerce_order_items', 'wp_wc_customer_lookup', 'wp_actionscheduler_actions']) {
-      const ev = { table, kind: 'update' as const, before: { id: '1' }, after: { id: '1' } };
+      const ev = { table, kind: 'update' as const, pkCols: ['id'], before: { id: '1' }, after: { id: '1' } };
       expect('refused' in classify(ev, 'wp_')).toBe(true);
     }
   });
@@ -96,12 +101,25 @@ describe('classify', () => {
     // ferry_* noise rule below and is correctly classified as noise, not a candidate op - see
     // the dedicated noise test above.
     const ev = {
-      table: 'wp_options', kind: 'update' as const,
+      table: 'wp_options', kind: 'update' as const, pkCols: ['option_id'],
       before: { option_id: '506', option_name: 'site_description', option_value: 'hello', autoload: 'auto' },
       after: { option_id: '506', option_name: 'site_description', option_value: 'world', autoload: 'auto' },
     };
     expect(classify(ev, 'wp_')).toEqual({
       op: { kind: 'option_set', name: 'site_description', old: 'hello', new: 'world' },
+      risk: 'low',
+    });
+  });
+
+  it('classifies a wp_options insert (first-time add_option, per the pins doc) as option_set/low with old=null', () => {
+    // The pins doc: the *first* `wp option update` on a non-existent option is a physical INSERT
+    // under the hood (add_option's INSERT ... ON DUPLICATE KEY UPDATE), not an UPDATE event.
+    const ev = {
+      table: 'wp_options', kind: 'insert' as const, pkCols: ['option_id'],
+      after: { option_id: '507', option_name: 'site_description', option_value: 'hello', autoload: 'auto' },
+    };
+    expect(classify(ev, 'wp_')).toEqual({
+      op: { kind: 'option_set', name: 'site_description', old: null, new: 'hello' },
       risk: 'low',
     });
   });
@@ -124,7 +142,7 @@ describe('classify', () => {
 
   it('classifies a custom-table update as row_update/higher', () => {
     const ev = {
-      table: 'ferry_spike_table', kind: 'update' as const,
+      table: 'ferry_spike_table', kind: 'update' as const, pkCols: ['id'],
       before: { id: '1', val: 'x' },
       after: { id: '1', val: 'y' },
     };
@@ -135,11 +153,53 @@ describe('classify', () => {
   });
 
   it('classifies a custom-table insert as row_insert/higher', () => {
-    const ev = { table: 'ferry_spike_table', kind: 'insert' as const, after: { id: '1', val: 'x' } };
+    const ev = { table: 'ferry_spike_table', kind: 'insert' as const, pkCols: ['id'], after: { id: '1', val: 'x' } };
     expect(classify(ev, 'wp_')).toEqual({
       op: { kind: 'row_insert', table: 'ferry_spike_table', pkCol: 'id', pk: 1, new: { id: '1', val: 'x' } },
       risk: 'higher',
     });
+  });
+
+  it('picks the single PRI column correctly even when it is not the first field', () => {
+    // Guards against the old Object.keys(row)[0] positional guess: 'id' is PRI but listed second.
+    const ev = {
+      table: 'ferry_spike_table', kind: 'update' as const, pkCols: ['id'],
+      before: { val: 'x', id: '7' },
+      after: { val: 'y', id: '7' },
+    };
+    expect(classify(ev, 'wp_')).toEqual({
+      op: { kind: 'row_update', table: 'ferry_spike_table', pkCol: 'id', pk: 7, old: { val: 'x', id: '7' }, new: { val: 'y', id: '7' } },
+      risk: 'higher',
+    });
+  });
+
+  it('refuses a composite-PK table (wp_term_relationships-shaped) - DbOp.pk cannot represent it', () => {
+    const ev = {
+      table: 'wp_term_relationships', kind: 'insert' as const, pkCols: ['object_id', 'term_taxonomy_id'],
+      after: { object_id: '10', term_taxonomy_id: '3', term_order: '0' },
+    };
+    const result = classify(ev, 'wp_');
+    expect(result).toEqual({ refused: 'unsupported_pk: wp_term_relationships' });
+  });
+
+  it('refuses a non-numeric (varchar/UUID) PK value rather than silently NaN-ing it', () => {
+    const ev = {
+      table: 'ferry_uuid_table', kind: 'insert' as const, pkCols: ['uuid'],
+      after: { uuid: '3fa85f64-5717-4562-b3fc-2c963f66afa6', val: 'x' },
+    };
+    const result = classify(ev, 'wp_');
+    expect(result).toEqual({ refused: 'unsupported_pk: ferry_uuid_table' });
+  });
+
+  it('refuses events carrying an unverifiable 0x... hex-literal value', () => {
+    // No fixture/pins-doc coverage of binary-column rendering; refuse rather than guess at decode.
+    const ev = {
+      table: 'ferry_spike_table', kind: 'update' as const, pkCols: ['id'],
+      before: { id: '1', val: 'x' },
+      after: { id: '1', val: '0x68656c6c6f' },
+    };
+    const result = classify(ev, 'wp_');
+    expect(result).toEqual({ refused: 'binary_value_unsupported: ferry_spike_table' });
   });
 });
 

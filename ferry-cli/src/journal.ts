@@ -11,8 +11,16 @@ const run = promisify(execFile);
 export interface RawRowEvent {
   table: string;
   kind: 'update' | 'insert' | 'delete';
+  /** Column names SHOW COLUMNS marked PRI for this table - empty if none, >1 if composite. */
+  pkCols: string[];
   before?: Record<string, string | null>;
   after?: Record<string, string | null>;
+}
+
+/** Per-table column info resolved from `SHOW COLUMNS FROM <table>` (ordinal order + PRI flags). */
+export interface TableColumns {
+  fields: string[];
+  pkCols: string[];
 }
 
 const HEADER_RE = /^### (UPDATE|INSERT INTO|DELETE FROM) `[^`]+`\.`([^`]+)`\s*$/;
@@ -43,7 +51,7 @@ function unquote(raw: string): string | null {
  * Row events carry only `@N=value` ordinals, never column names - `columns(table)` resolves
  * them (cached `SHOW COLUMNS FROM <table>` results, ordinal order).
  */
-export function parseBinlog(raw: string, columns: (table: string) => string[]): RawRowEvent[] {
+export function parseBinlog(raw: string, columns: (table: string) => TableColumns): RawRowEvent[] {
   const events: RawRowEvent[] = [];
   let current: RawRowEvent | null = null;
   let section: 'before' | 'after' | null = null;
@@ -60,8 +68,9 @@ export function parseBinlog(raw: string, columns: (table: string) => string[]): 
     if (header) {
       flush();
       const kind = header[1] === 'UPDATE' ? 'update' : header[1] === 'INSERT INTO' ? 'insert' : 'delete';
-      current = { table: header[2], kind };
-      cols = columns(header[2]);
+      const resolved = columns(header[2]);
+      current = { table: header[2], kind, pkCols: resolved.pkCols };
+      cols = resolved.fields;
       continue;
     }
     if (!current) continue;
@@ -103,21 +112,25 @@ function stripPrefix(table: string, prefix: string): string {
 }
 
 /**
- * Row-level `table,pkCol,pk` ops have no columns() callback here - the primary key is assumed
- * to be the first column, matching every WP-shaped table seen so far (wp_options.option_id,
- * wp_postmeta.meta_id, the fixtures' own ferry_spike_table.id). Object key order is preserved
- * from insertion order in parseBinlog, i.e. ordinal order, so Object.keys(row)[0] === columns(table)[0].
+ * `DbOp.pk` is a single `number` - it cannot represent a composite key (e.g.
+ * wp_term_relationships' (object_id, term_taxonomy_id)) or a non-numeric key (varchar/UUID).
+ * Guessing wrong here is a wrong-row CAS hazard, so buildRowOp only proceeds when SHOW COLUMNS
+ * reported exactly one PRI column and its value parses as a finite number; otherwise it signals
+ * `unsupportedPk` and classify() refuses the whole event instead of emitting a bad DbOp.
  */
-function buildRowOp(ev: RawRowEvent): DbOp {
+function buildRowOp(ev: RawRowEvent): DbOp | { unsupportedPk: true } {
+  if (ev.pkCols.length !== 1) return { unsupportedPk: true }; // composite key or no PK found
+  const pkCol = ev.pkCols[0];
   const row = ev.after ?? ev.before!;
-  const pkCol = Object.keys(row)[0];
+  const pk = Number(row[pkCol]);
+  if (!Number.isFinite(pk)) return { unsupportedPk: true }; // varchar/UUID/null key
   if (ev.kind === 'insert') {
-    return { kind: 'row_insert', table: ev.table, pkCol, pk: Number(row[pkCol]), new: ev.after! };
+    return { kind: 'row_insert', table: ev.table, pkCol, pk, new: ev.after! };
   }
   if (ev.kind === 'delete') {
-    return { kind: 'row_delete', table: ev.table, pkCol, pk: Number(ev.before![pkCol]), old: ev.before! };
+    return { kind: 'row_delete', table: ev.table, pkCol, pk, old: ev.before! };
   }
-  return { kind: 'row_update', table: ev.table, pkCol, pk: Number(row[pkCol]), old: ev.before!, new: ev.after! };
+  return { kind: 'row_update', table: ev.table, pkCol, pk, old: ev.before!, new: ev.after! };
 }
 
 function buildOptionOp(ev: RawRowEvent, name: string): DbOp {
@@ -137,11 +150,23 @@ function buildPostmetaOp(ev: RawRowEvent): DbOp {
   return { kind: 'postmeta_set', postId, key, old: ev.before ? ev.before.meta_value : null, new: ev.after!.meta_value! };
 }
 
-/** Global Constraints classification: noise, then content-table refusal, then option_set(delete)/postmeta_set(delete)/row_*. */
+// mysqlbinlog -v's rendering of binary/BLOB columns isn't covered by any fixture or the pins
+// doc (both are silent on it) - a bare `0x...` token means the decoded value can't be trusted,
+// so refuse rather than guess. Revisit with a real fixture if/when a BLOB column needs support.
+const HEX_LITERAL_RE = /^0x[0-9a-fA-F]+$/;
+
+function hasBinaryValue(ev: RawRowEvent): boolean {
+  const values = [...Object.values(ev.before ?? {}), ...Object.values(ev.after ?? {})];
+  return values.some((v) => v !== null && HEX_LITERAL_RE.test(v));
+}
+
+/** Global Constraints classification: binary-value/pk safety guards, then noise, then content-table refusal, then option_set(delete)/postmeta_set(delete)/row_*. */
 export function classify(
   ev: RawRowEvent,
   prefix: string,
 ): { op: DbOp; risk: RiskClass } | { noise: true } | { refused: string } {
+  if (hasBinaryValue(ev)) return { refused: `binary_value_unsupported: ${ev.table}` };
+
   const stripped = stripPrefix(ev.table, prefix);
 
   if (stripped === 'options') {
@@ -151,12 +176,24 @@ export function classify(
   }
   if (isRefusedTable(stripped)) return { refused: `content table: ${ev.table}` };
   if (stripped === 'postmeta') return { op: buildPostmetaOp(ev), risk: 'low' };
-  return { op: buildRowOp(ev), risk: 'higher' };
+
+  const rowOp = buildRowOp(ev);
+  if ('unsupportedPk' in rowOp) return { refused: `unsupported_pk: ${ev.table}` };
+  return { op: rowOp, risk: 'higher' };
 }
 
-function parseShowColumns(stdout: string): string[] {
-  const lines = stdout.trim().split('\n');
-  return lines.slice(1).filter((l) => l.length > 0).map((l) => l.split('\t')[0]);
+/** `SHOW COLUMNS FROM <table>` is `Field\tType\tNull\tKey\tDefault\tExtra` - Key='PRI' marks a
+ *  primary-key column (every column of a composite key is marked, not just one). */
+function parseShowColumns(stdout: string): TableColumns {
+  const lines = stdout.trim().split('\n').slice(1).filter((l) => l.length > 0);
+  const fields: string[] = [];
+  const pkCols: string[] = [];
+  for (const line of lines) {
+    const [field, , , key] = line.split('\t');
+    fields.push(field);
+    if (key === 'PRI') pkCols.push(field);
+  }
+  return { fields, pkCols };
 }
 
 /** Table names touched, found by scanning the same `### <KIND>` headers parseBinlog reads. */
@@ -186,12 +223,12 @@ export async function journalCandidates(
   const raw = await env.extractBinlog(docroot, profile.binlog);
 
   // SHOW COLUMNS is async (shells out), so resolve every touched table's columns before parsing.
-  const columnCache = new Map<string, string[]>();
+  const columnCache = new Map<string, TableColumns>();
   for (const table of tablesInRaw(raw)) {
     const { stdout } = await run('ddev', ['mysql', '-e', `SHOW COLUMNS FROM ${table}`], { cwd: docroot });
     columnCache.set(table, parseShowColumns(stdout));
   }
-  const events = parseBinlog(raw, (table) => columnCache.get(table) ?? []);
+  const events = parseBinlog(raw, (table) => columnCache.get(table) ?? { fields: [], pkCols: [] });
 
   const ops: { op: DbOp; risk: RiskClass }[] = [];
   let refusedCount = 0;
