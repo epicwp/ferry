@@ -5,7 +5,9 @@ Preconditions: fixture running at ~/ferry-e2e/prod; `ddev delete -Oy ferry-prod-
 (or put `ANTHROPIC_API_KEY=<key>` in a git-ignored `.env` at the repo root — the server loads it; shell env wins).
 Optional caps for the run: `FERRY_AGENT_MAX_BUDGET_USD=2`.
 
-1. `npm --workspace ferry-server run dev` and `npm --workspace ferry-dashboard run dev`.
+1. `npm --workspace ferry-server run dev` (must be started in the shell where `NODE_EXTRA_CA_CERTS` was exported above —
+   it only takes effect at Node process start, so exporting it later or in a different shell does not help) and
+   `npm --workspace ferry-dashboard run dev`.
 2. Sign up at http://localhost:5173, add `https://ferry-prod.ddev.site`, pair
    (`cd ~/ferry-e2e/prod && ddev wp eval 'print(json_encode(\Ferry\Auth::issue_pairing_code()));'`),
    run the initial sync to Ready.

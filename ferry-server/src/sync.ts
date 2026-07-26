@@ -78,8 +78,8 @@ export class SyncManager {
         },
       });
       const verified = await this.engine.verifyClone(result.url);
-      if (!verified) {
-        throw new Error(`Clone did not answer at ${result.url}.`);
+      if (!verified.ok) {
+        throw new Error(`Clone did not answer at ${result.url}.${verified.detail ? ` ${verified.detail}` : ''}`);
       }
       const now = new Date().toISOString();
       this.store.setStatus(site.id, 'ready', { lastError: null, lastSyncAt: now, verifiedAt: now });
