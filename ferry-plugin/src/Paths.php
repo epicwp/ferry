@@ -98,7 +98,7 @@ final class Paths
                 return 'denied_path';
             }
         }
-        if (strpos($normalized, '.ferry-staging') !== false || strpos($normalized, '.ferry-backup') !== false) {
+        if (strpos($normalized_lower, '.ferry-staging') !== false || strpos($normalized_lower, '.ferry-backup') !== false) {
             return 'denied_path';
         }
         if (strpos($normalized_lower, 'wp-content/mu-plugins/ferry-') === 0) {

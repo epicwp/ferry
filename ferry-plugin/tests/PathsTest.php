@@ -148,4 +148,12 @@ final class PathsTest extends TestCase
         symlink('/etc/hosts', $this->root . '/wp-content/themes/t/evil-link.php');
         $this->assertNotNull(Paths::check_write($this->root, 'wp-content/themes/t/evil-link.php'));
     }
+
+    public function test_write_denied_uppercased_ferry_backup_marker(): void
+    {
+        // Re-review vector: the .ferry-staging/.ferry-backup substring check
+        // must be case-folded too, or an uppercased marker anywhere outside
+        // wp-content/uploads/ (where Excludes happens to catch it anyway) sails through.
+        $this->assertNotNull(Paths::check_write($this->root, 'wp-content/themes/t/.FERRY-BACKUP/x.php'));
+    }
 }
