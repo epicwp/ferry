@@ -74,7 +74,7 @@ final class CommitTest extends TestCase
         $this->assertSame('committed', $meta['status']);
         $this->assertArrayHasKey('committed_at', $meta);
         $this->assertSame(
-            [['path' => 'wp-content/themes/t/a.css', 'existed' => true, 'new_hash' => $this->sha('new content')]],
+            [['path' => 'wp-content/themes/t/a.css', 'existed' => true, 'old_hash' => $this->sha('old content'), 'new_hash' => $this->sha('new content')]],
             $meta['files']
         );
     }
@@ -181,33 +181,117 @@ final class CommitTest extends TestCase
         $this->assertDirectoryDoesNotExist(Staging::backup_dir($this->root, $this->txid));
     }
 
-    // ---- (h) retention: 31-day-old backup pruned, 29-day-old kept ----
+    // ---- (h) retention + Tx::read status-mapping tests moved to TxTest.php ----
 
-    public function test_prune_removes_31_day_old_backup_and_keeps_29_day_old(): void
+    // ---- review fix 1: a denied write path refuses the WHOLE commit, before any step runs ----
+
+    public function test_denied_write_path_refuses_commit_before_any_step_runs(): void
     {
-        $now = 2000000000;
-        $old = Staging::backup_dir($this->root, str_repeat('a', 32));
-        $recent = Staging::backup_dir($this->root, str_repeat('b', 32));
-        mkdir($old, 0777, true);
-        mkdir($recent, 0777, true);
-        touch($old, $now - 31 * 86400);
-        touch($recent, $now - 29 * 86400);
+        $files = [
+            ['path' => 'wp-config.php', 'new_hash' => str_repeat('a', 64), 'old_hash' => null],
+        ];
+        $wpdb = new FakeWpdb([]);
 
-        $removed = Tx::prune($this->root, $now);
+        $result = Commit::run($this->root, $wpdb, $this->txid, $files, [], [], false);
 
-        $this->assertSame(1, $removed);
-        $this->assertDirectoryDoesNotExist($old);
-        $this->assertDirectoryExists($recent);
+        $this->assertFalse($result['committed']);
+        $this->assertSame([], $result['steps']);
+        $this->assertSame([['path' => 'wp-config.php', 'code' => 'denied_path']], $result['denied']);
+        $this->assertNull(Tx::read($this->root, $this->txid)); // tx meta untouched - nothing was ever written
     }
 
-    // ---- Tx::read: a record stuck at "committing" (process died mid-commit) reads as "dirty" ----
-
-    public function test_tx_read_reports_dirty_for_a_record_stuck_committing(): void
+    public function test_denied_write_path_refuses_even_under_force(): void
     {
-        Tx::write($this->root, $this->txid, ['status' => 'committing']);
+        // Path safety is not a drift check - force must never bypass it.
+        $files = [
+            ['path' => '../escape.txt', 'new_hash' => str_repeat('a', 64), 'old_hash' => null],
+        ];
+        $wpdb = new FakeWpdb([]);
 
-        $meta = Tx::read($this->root, $this->txid);
+        $result = Commit::run($this->root, $wpdb, $this->txid, $files, [], [], true);
 
-        $this->assertSame('dirty', $meta['status']);
+        $this->assertFalse($result['committed']);
+        $this->assertSame([['path' => '../escape.txt', 'code' => 'denied_path']], $result['denied']);
+    }
+
+    public function test_file_hash_precondition_on_unreadable_path_reports_sentinel_not_real_hash(): void
+    {
+        file_put_contents($this->root . '/wp-config.php', 'DB_PASSWORD SECRET');
+        $preconditions = [
+            ['type' => 'file_hash', 'path' => 'wp-config.php', 'expected' => str_repeat('b', 64)],
+        ];
+        $wpdb = new FakeWpdb([]);
+
+        $result = Commit::run($this->root, $wpdb, $this->txid, [], [], $preconditions, false);
+
+        $this->assertFalse($result['committed']);
+        $this->assertSame([
+            ['key' => 'wp-config.php', 'expected' => str_repeat('b', 64), 'found' => 'unreadable'],
+        ], $result['conflicts']);
+        // never the real content hash of wp-config.php
+        $this->assertNotSame($this->sha('DB_PASSWORD SECRET'), $result['conflicts'][0]['found']);
+    }
+
+    // ---- review fix 5: mid-loop swap failure (file 3 of 3) reverses files 1-2 byte-identically ----
+
+    public function test_swap_failure_on_third_file_reverses_first_two_byte_identically(): void
+    {
+        file_put_contents($this->root . '/wp-content/themes/t/a.css', 'a-old');
+        file_put_contents($this->root . '/wp-content/themes/t/b.css', 'b-old');
+        // Obstruct file 3's target with a non-empty directory so its swap rename() fails.
+        mkdir($this->root . '/wp-content/themes/t/c.css', 0777, true);
+        file_put_contents($this->root . '/wp-content/themes/t/c.css/blocking.txt', 'in the way');
+
+        Staging::add($this->root, $this->txid, [
+            $this->stagedFile('wp-content/themes/t/a.css', 'a-new'),
+            $this->stagedFile('wp-content/themes/t/b.css', 'b-new'),
+            $this->stagedFile('wp-content/themes/t/c.css', 'c-new'),
+        ]);
+        $files = [
+            ['path' => 'wp-content/themes/t/a.css', 'new_hash' => $this->sha('a-new'), 'old_hash' => $this->sha('a-old')],
+            ['path' => 'wp-content/themes/t/b.css', 'new_hash' => $this->sha('b-new'), 'old_hash' => $this->sha('b-old')],
+            // c.css is a directory right now, not a file - is_file() sees it as "did not exist".
+            ['path' => 'wp-content/themes/t/c.css', 'new_hash' => $this->sha('c-new'), 'old_hash' => null],
+        ];
+        $wpdb = new FakeWpdb([]);
+
+        $result = Commit::run($this->root, $wpdb, $this->txid, $files, [], [], false);
+
+        $this->assertFalse($result['committed']);
+        $stepsByName = array_column($result['steps'], 'ok', 'name');
+        $this->assertTrue($stepsByName['hashes']);
+        $this->assertTrue($stepsByName['drift']);
+        $this->assertTrue($stepsByName['backup']);
+        $this->assertFalse($stepsByName['swap']);
+
+        $this->assertSame('a-old', file_get_contents($this->root . '/wp-content/themes/t/a.css'));
+        $this->assertSame('b-old', file_get_contents($this->root . '/wp-content/themes/t/b.css'));
+        $this->assertFileDoesNotExist(Staging::backup_dir($this->root, $this->txid) . '/files/wp-content/themes/t/a.css');
+        $this->assertFileDoesNotExist(Staging::backup_dir($this->root, $this->txid) . '/files/wp-content/themes/t/b.css');
+        // the obstruction itself was never touched
+        $this->assertDirectoryExists($this->root . '/wp-content/themes/t/c.css');
+        $this->assertSame('conflict', $this->meta()['status']);
+    }
+
+    // ---- review fix 4: commit touches an existing backup dir, surviving a concurrent prune ----
+
+    public function test_commit_touches_existing_backup_dir_to_survive_concurrent_prune(): void
+    {
+        // Simulate a prior attempt on this txid: the backup dir already exists and is aged
+        // (a retried /commit call reuses the same txid after an earlier conflict).
+        Tx::write($this->root, $this->txid, ['status' => 'conflict']);
+        $backupDir = Staging::backup_dir($this->root, $this->txid);
+        touch($backupDir, time() - 29 * 86400);
+
+        file_put_contents($this->root . '/wp-content/themes/t/a.css', 'old content');
+        Staging::add($this->root, $this->txid, [$this->stagedFile('wp-content/themes/t/a.css', 'new content')]);
+        $files = [
+            ['path' => 'wp-content/themes/t/a.css', 'new_hash' => $this->sha('new content'), 'old_hash' => $this->sha('old content')],
+        ];
+        $wpdb = new FakeWpdb([]);
+
+        Commit::run($this->root, $wpdb, $this->txid, $files, [], [], false);
+
+        $this->assertGreaterThanOrEqual(time() - 5, filemtime($backupDir));
     }
 }

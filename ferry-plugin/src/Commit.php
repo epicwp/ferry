@@ -24,6 +24,14 @@ final class Commit
             return ['committed' => false, 'steps' => [], 'conflicts' => [], 'error' => 'ferry_too_many_files'];
         }
 
+        // Path safety is not a drift/business-logic check - it is unconditional (force does
+        // not touch it) and refuses the whole commit before any step runs: nothing renamed,
+        // tx meta untouched (stays whatever it was - staged, or unknown).
+        $denied = self::check_write_paths($root, $files);
+        if ($denied !== []) {
+            return ['committed' => false, 'steps' => [], 'conflicts' => [], 'denied' => $denied];
+        }
+
         $stagingDir = Staging::dir($root, $txid);
         $backupDir = Staging::backup_dir($root, $txid);
         $steps = [];
@@ -38,8 +46,12 @@ final class Commit
         }
 
         // Step 2: drift - each target's current content vs old_hash (null = must not exist),
-        // plus any file_hash preconditions. Existence is recorded regardless of $force - needed
-        // by the later steps and by rollback - only the compare itself is skipped under $force.
+        // plus any file_hash preconditions. Existence/old_hash are recorded regardless of
+        // $force - needed by the later steps and by rollback - only the compare itself is
+        // skipped under $force. file_hash preconditions are READS, not write targets: the
+        // read guard applies (not check_write) - an unreadable path (wp-config.php, an
+        // excluded dir, a traversal attempt) never leaks its real hash back in the response,
+        // it always drifts as the 'unreadable' sentinel instead.
         $t0 = microtime(true);
         $fileState = [];
         $conflicts = [];
@@ -53,13 +65,13 @@ final class Commit
             if (!$force && $current !== $oldHash) {
                 $conflicts[] = ['key' => $path, 'expected' => $oldHash, 'found' => $current];
             }
-            $fileState[$path] = ['existed' => $existed, 'new_hash' => $newHash];
+            $fileState[$path] = ['existed' => $existed, 'old_hash' => $current, 'new_hash' => $newHash];
         }
         foreach ($preconditions as $pre) {
             if (($pre['type'] ?? null) === 'file_hash') {
                 $p = (string) $pre['path'];
-                $abs = $root . '/' . $p;
-                $current = is_file($abs) ? hash_file('sha256', $abs) : null;
+                $resolved = Paths::resolve_read($root, $p);
+                $current = $resolved === null ? 'unreadable' : hash_file('sha256', $root . '/' . $resolved);
                 if (!$force && $current !== $pre['expected']) {
                     $conflicts[] = ['key' => $p, 'expected' => $pre['expected'], 'found' => $current];
                 }
@@ -73,7 +85,10 @@ final class Commit
         }
 
         // Nothing mutates the filesystem before this point - safe to mark "committing" now.
+        // touch() guards against a concurrent prune reclaiming this (possibly near-30-day-old,
+        // on a retried txid) backup dir while the rename phase below is still in flight.
         Tx::write($root, $txid, ['status' => 'committing']);
+        touch($backupDir);
 
         // Step 3: backup - rename existing targets into backup/files/<relpath>.
         $t0 = microtime(true);
@@ -86,7 +101,7 @@ final class Commit
             }
             $backupPath = $backupDir . '/files/' . $path;
             self::ensure_parent_dir($backupPath);
-            if (!rename($root . '/' . $path, $backupPath)) {
+            if (!@rename($root . '/' . $path, $backupPath)) {
                 $backupOk = false;
                 break;
             }
@@ -111,7 +126,7 @@ final class Commit
             }
             $target = $root . '/' . $path;
             self::ensure_parent_dir($target);
-            if (!rename($blobPaths[$path], $target)) {
+            if (!@rename($blobPaths[$path], $target)) {
                 $swapOk = false;
                 break;
             }
@@ -140,13 +155,21 @@ final class Commit
             return $response;
         }
 
-        // Success - record what was touched so /rollback can restore it later.
+        // Success - record what was touched so /rollback can restore it later. old_hash is
+        // the ACTUAL pre-commit content hash (not the caller's claimed old_hash, which under
+        // $force may not match reality) - it's what rollback compares against to recognize a
+        // file it already restored on a retried, previously-interrupted rollback.
         Tx::write($root, $txid, [
             'status' => 'committed',
             'committed_at' => gmdate('c'),
             'files' => array_map(function ($f) use ($fileState) {
                 $path = (string) $f['path'];
-                return ['path' => $path, 'existed' => $fileState[$path]['existed'], 'new_hash' => $fileState[$path]['new_hash']];
+                return [
+                    'path' => $path,
+                    'existed' => $fileState[$path]['existed'],
+                    'old_hash' => $fileState[$path]['old_hash'],
+                    'new_hash' => $fileState[$path]['new_hash'],
+                ];
             }, $files),
         ]);
 
@@ -159,20 +182,40 @@ final class Commit
      * (current target content vs what the push installed) is checked here, up front, against
      * the file list recorded by `run()` above - any mismatch refuses the whole rollback.
      *
-     * @return array{rolled_back:bool, conflicts:array}
+     * Idempotent: a file already restored (current content matches the pre-push original,
+     * `old_hash`) is treated as satisfied, not a conflict - a rollback interrupted mid-restore
+     * (crash - meta stuck at `rolling_back`) can be retried and complete rather than CAS-fail
+     * against its own prior partial progress.
+     *
+     * @return array{rolled_back:bool, conflicts:array, denied?:array}
      */
     public static function rollback(string $root, $wpdb, string $txid, array $ops): array
     {
         $meta = Tx::read($root, $txid);
-        $files = (is_array($meta) && isset($meta['files']) && is_array($meta['files'])) ? $meta['files'] : [];
+        if (!is_array($meta)) {
+            $meta = [];
+        }
+        $files = isset($meta['files']) && is_array($meta['files']) ? $meta['files'] : [];
         $backupDir = Staging::backup_dir($root, $txid);
 
+        // Defense in depth: these paths were already write-validated during commit - re-verify
+        // anyway, the same way and for the same reason `run()` does.
+        $denied = self::check_write_paths($root, $files);
+        if ($denied !== []) {
+            return ['rolled_back' => false, 'conflicts' => [], 'denied' => $denied];
+        }
+
         $conflicts = [];
+        $pending = [];
         foreach ($files as $f) {
             $path = (string) $f['path'];
             $abs = $root . '/' . $path;
             $current = is_file($abs) ? hash_file('sha256', $abs) : null;
-            if ($current !== $f['new_hash']) {
+            if ($current === $f['new_hash']) {
+                $pending[] = $f; // not yet restored - needs action
+            } elseif ($current === $f['old_hash']) {
+                continue; // already restored (idempotent retry) - satisfied, nothing to do
+            } else {
                 $conflicts[] = ['key' => $path, 'expected' => $f['new_hash'], 'found' => $current];
             }
         }
@@ -180,19 +223,24 @@ final class Commit
             return ['rolled_back' => false, 'conflicts' => $conflicts];
         }
 
+        // touch() guards against a concurrent prune reclaiming this backup dir mid-restore.
+        $meta['status'] = 'rolling_back';
+        Tx::write($root, $txid, $meta);
+        touch($backupDir);
+
         $restored = [];  // existed=true: backup/files/<path> -> target
         $discarded = []; // existed=false: target -> backup/discarded/<path>
-        foreach ($files as $f) {
+        foreach ($pending as $f) {
             $path = (string) $f['path'];
             $abs = $root . '/' . $path;
             if ($f['existed']) {
                 self::ensure_parent_dir($abs);
-                rename($backupDir . '/files/' . $path, $abs);
+                @rename($backupDir . '/files/' . $path, $abs);
                 $restored[] = $path;
             } elseif (is_file($abs)) {
                 $discardPath = $backupDir . '/discarded/' . $path;
                 self::ensure_parent_dir($discardPath);
-                rename($abs, $discardPath);
+                @rename($abs, $discardPath);
                 $discarded[] = $path;
             }
         }
@@ -200,16 +248,33 @@ final class Commit
         $dbResult = DbOps::apply_in_transaction($wpdb, $ops, [], $wpdb->prefix, false);
         if (!$dbResult['committed']) {
             foreach (array_reverse($discarded) as $path) {
-                rename($backupDir . '/discarded/' . $path, $root . '/' . $path);
+                @rename($backupDir . '/discarded/' . $path, $root . '/' . $path);
             }
             foreach (array_reverse($restored) as $path) {
-                rename($root . '/' . $path, $backupDir . '/files/' . $path);
+                @rename($root . '/' . $path, $backupDir . '/files/' . $path);
             }
+            $meta['status'] = 'committed'; // rollback did not happen - restore the prior status
+            Tx::write($root, $txid, $meta);
             return ['rolled_back' => false, 'conflicts' => $dbResult['conflicts']];
         }
 
-        Tx::write($root, $txid, ['status' => 'rolled_back']);
+        $meta['status'] = 'rolled_back';
+        Tx::write($root, $txid, $meta);
         return ['rolled_back' => true, 'conflicts' => []];
+    }
+
+    /** @return array<int, array{path:string, code:string}> */
+    private static function check_write_paths(string $root, array $files): array
+    {
+        $denied = [];
+        foreach ($files as $f) {
+            $path = (string) ($f['path'] ?? '');
+            $code = Paths::check_write($root, $path);
+            if ($code !== null) {
+                $denied[] = ['path' => $path, 'code' => $code];
+            }
+        }
+        return $denied;
     }
 
     /** @return array{0: bool, 1: array, 2: array<string,string>} [ok, conflicts, path => blob path] */
@@ -253,7 +318,7 @@ final class Commit
     private static function undo_backup(string $root, string $backupDir, array $paths): void
     {
         foreach (array_reverse($paths) as $path) {
-            rename($backupDir . '/files/' . $path, $root . '/' . $path);
+            @rename($backupDir . '/files/' . $path, $root . '/' . $path);
         }
     }
 
@@ -261,7 +326,7 @@ final class Commit
     private static function undo_swap(string $root, array $paths, array $blobPaths): void
     {
         foreach (array_reverse($paths) as $path) {
-            rename($root . '/' . $path, $blobPaths[$path]);
+            @rename($root . '/' . $path, $blobPaths[$path]);
         }
     }
 
