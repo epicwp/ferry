@@ -123,4 +123,43 @@ test('3b gate: sign up → add site → pair → watch progress → ready in the
   await page.getByRole('button', { name: 'Back to sites' }).click();
   await expect(page.locator('.chip--ready')).toBeVisible();
   await expect(page.getByText(/synced (just now|\d+ min ago)/)).toBeVisible();
+
+  // --- Plan 4: agent chat on the ready site (scripted runner — no API tokens) ---
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open' }).click();          // ready site -> /sites/:id
+  // 'Agent chat' also labels the sidebar nav item, so scope to the chat header title.
+  await expect(page.locator('.chat__title')).toHaveText('Agent chat');
+  await expect(page.getByText('SSE live')).toBeVisible();
+
+  const composer = page.getByPlaceholder('Ask a follow-up or request another fix…');
+  await composer.fill('Why is VAT wrong on orders above €100?');
+  await page.getByRole('button', { name: 'Send message' }).click();
+
+  // Scoped to the user-bubble class: the final agent text below echoes this same string,
+  // so an unscoped getByText matches both bubbles (strict-mode violation).
+  await expect(page.locator('.chat__msg--user')).toHaveText('Why is VAT wrong on orders above €100?'); // user bubble via SSE echo
+  await expect(page.getByText('Grep')).toBeVisible();                 // tool row
+  await expect(page.getByText('functions.php:412')).toBeVisible();    // tool result
+  await expect(page.getByText(/Plan: check the tax settings/)).toBeVisible(); // final agent text
+
+  // history survives reload
+  await page.reload();
+  await expect(page.getByText(/Plan: check the tax settings/)).toBeVisible();
+
+  // SSE error state is visible, not a silent freeze (3b fold-in). Note: browser-context
+  // setOffline() does not interrupt an already-open EventSource stream (verified against a
+  // minimal repro — heartbeats kept flowing while "offline"); it only blocks new connection
+  // attempts. So we force a fresh, blocked connection attempt instead: intercept the events
+  // endpoint, then reload (remounts the chat and opens a new EventSource, which now fails).
+  await page.route('**/agent/events*', (route) => route.abort());
+  await page.reload();
+  await expect(page.getByText('connection lost')).toBeVisible();
+  await page.unroute('**/agent/events*');
+  await page.getByRole('button', { name: 'Reconnect' }).click();
+  await expect(page.getByText('SSE live')).toBeVisible();
+
+  // new session escape hatch clears the thread
+  await page.getByRole('button', { name: 'Start a new session' }).click();
+  await expect(page.getByText(/Plan: check the tax settings/)).not.toBeVisible();
+  await expect(page.getByText('New session started.')).toBeVisible();
 });
