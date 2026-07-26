@@ -14,6 +14,7 @@ final class Routes
             ['GET',  '/info',      'info'],
             ['GET',  '/manifest',  'manifest'],
             ['POST', '/files',     'files'],
+            ['POST', '/stage',     'stage'],
             ['GET',  '/db/tables', 'db_tables'],
             ['GET',  '/db',        'db_export'],
         ];
@@ -65,6 +66,23 @@ final class Routes
             return new \WP_Error('ferry_bad_code', 'Invalid or expired pairing code.', ['status' => 403]);
         }
         return ['secret' => $secret, 'siteurl' => get_option('siteurl')];
+    }
+
+    /** §8: stage file blobs for a pending write transaction. Per-file rejects never abort the batch. */
+    public static function stage(\WP_REST_Request $request)
+    {
+        if (is_multisite()) {
+            return new \WP_Error('ferry_multisite', 'Multisite is not supported. Ferry refuses multisite installs by design.', ['status' => 409]);
+        }
+        $params = $request->get_json_params();
+        $txid = (string) ($params['txid'] ?? '');
+        $files = (isset($params['files']) && is_array($params['files'])) ? $params['files'] : [];
+        $root = realpath(untrailingslashit(ABSPATH));
+        $result = Staging::add($root, $txid, $files);
+        if (isset($result['error'])) {
+            return new \WP_Error($result['error'], 'Invalid or malformed transaction id.', ['status' => 400]);
+        }
+        return $result;
     }
 
     public static function info()
