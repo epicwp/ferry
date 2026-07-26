@@ -5,9 +5,13 @@ import { ferryHome } from '../../ferry-cli/src/profile.js';
 import { buildApp } from './app.js';
 import { ensureAgentBranch } from './agent/branch.js';
 import { sdkRunner } from './agent/sdk-runner.js';
+import { applyEnvFile } from './env-file.js';
 import { realEngine } from './engine.js';
 import { buildPluginZip } from './plugin-zip.js';
 import { Store } from './store.js';
+
+// Optional git-ignored .env at the repo root (ANTHROPIC_API_KEY etc.); shell env wins.
+applyEnvFile(fileURLToPath(new URL('../../.env', import.meta.url)));
 
 const home = ferryHome();
 mkdirSync(home, { recursive: true });

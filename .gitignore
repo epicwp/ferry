@@ -1,5 +1,6 @@
 node_modules/
 dist/
+/.env
 vendor/
 .phpunit.result.cache
 .DS_Store

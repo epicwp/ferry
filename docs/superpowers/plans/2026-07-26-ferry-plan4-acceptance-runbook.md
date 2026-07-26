@@ -1,7 +1,8 @@
 # Plan 4 acceptance runbook — real agent against the ferry-prod fixture
 
 Preconditions: fixture running at ~/ferry-e2e/prod; `ddev delete -Oy ferry-prod-ddev-site`;
-`export NODE_EXTRA_CA_CERTS="$(mkcert -CAROOT)/rootCA.pem"`; `export ANTHROPIC_API_KEY=<key>`.
+`export NODE_EXTRA_CA_CERTS="$(mkcert -CAROOT)/rootCA.pem"`; `export ANTHROPIC_API_KEY=<key>`
+(or put `ANTHROPIC_API_KEY=<key>` in a git-ignored `.env` at the repo root — the server loads it; shell env wins).
 Optional caps for the run: `FERRY_AGENT_MAX_BUDGET_USD=2`.
 
 1. `npm --workspace ferry-server run dev` and `npm --workspace ferry-dashboard run dev`.
