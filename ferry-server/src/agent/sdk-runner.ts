@@ -21,6 +21,21 @@ export interface SdkRunnerDeps {
 
 const text = (s: string) => ({ content: [{ type: 'text' as const, text: s }] });
 
+/** Explicit env allowlist (design: "env passes only what the session needs — audited at
+ *  implementation"). The SDK's `env` option REPLACES the subprocess env wholesale (it does
+ *  not merge with process.env), so this list must be complete enough for git/ddev to run —
+ *  not just a trim of the inherited env. */
+const ENV_ALLOWLIST = ['PATH', 'HOME', 'USER', 'SHELL', 'TMPDIR', 'ANTHROPIC_API_KEY', 'NODE_EXTRA_CA_CERTS', 'DOCKER_HOST'];
+
+function auditedEnv(configDir: string): Record<string, string> {
+  const env: Record<string, string> = { CLAUDE_CONFIG_DIR: configDir }; // transcripts under FERRY_HOME (spec §13)
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (ENV_ALLOWLIST.includes(key) || key.startsWith('LANG') || key.startsWith('LC_')) env[key] = value;
+  }
+  return env;
+}
+
 export function buildFerryTools(slug: string, deps: SdkRunnerDeps): unknown[] {
   return [
     tool(
@@ -92,10 +107,7 @@ export function sdkRunner(config: SdkRunnerConfig, depsOverride?: Partial<SdkRun
           permissionMode: 'bypassPermissions',
           disallowedTools: ['WebSearch', 'WebFetch', 'Bash(git push:*)'],
           mcpServers: { ferry },
-          env: {
-            ...process.env,
-            CLAUDE_CONFIG_DIR: config.configDir, // transcripts under FERRY_HOME (spec §13)
-          },
+          env: auditedEnv(config.configDir),
           hooks: {
             PreToolUse: [{
               matcher: 'Bash',
