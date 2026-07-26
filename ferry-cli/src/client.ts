@@ -56,6 +56,16 @@ export class FerryClient {
     return { buffer, headers: res.headers as IncomingHttpHeaders };
   }
 
+  async postJson(route: string, body: unknown): Promise<{ data: any; headers: IncomingHttpHeaders }> {
+    const raw = JSON.stringify(body);
+    const res = await this.send('POST', route, {}, raw);
+    const text = await res.body.text();
+    if (res.statusCode !== 200) {
+      throw new Error(`POST ${route} failed (${res.statusCode}): ${text.slice(0, 300)}`);
+    }
+    return { data: JSON.parse(text), headers: res.headers as IncomingHttpHeaders };
+  }
+
   async postStream(
     route: string,
     body: unknown,

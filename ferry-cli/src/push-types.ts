@@ -20,4 +20,8 @@ export interface Conflict { key: string; expected: string; found: string }
 export type PushOutcome =
   | { status: 'pushed'; txid: string; smoke: { label: string; ok: boolean; detail: string }[] }
   | { status: 'conflict'; txid: string; conflicts: Conflict[] }
-  | { status: 'rolled_back'; txid: string; reason: string; smoke?: { label: string; ok: boolean; detail: string }[] };
+  | { status: 'rolled_back'; txid: string; reason: string; smoke?: { label: string; ok: boolean; detail: string }[] }
+  // Controller decision (Task 11): /commit's `apply_error` (locks held, a statement failed, plugin
+  // reverted everything) or `denied` (malformed/hostile change) - neither is a drift conflict, and
+  // nothing was applied. Task 13 maps this back to draft with `detail` recorded.
+  | { status: 'error'; txid: string; detail: string };
