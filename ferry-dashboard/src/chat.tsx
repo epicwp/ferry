@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { agentHistory, agentNewSession, agentSend, type AgentWireEvent } from './api';
+import { agentHistory, agentNewSession, agentSend, ApiError, type AgentWireEvent } from './api';
 
 type ConnState = 'connecting' | 'live' | 'lost';
 
@@ -84,6 +84,7 @@ export function AgentChat({ siteId }: { siteId: number }) {
   const [streamText, setStreamText] = useState('');
   const [conn, setConn] = useState<ConnState>('connecting');
   const [draft, setDraft] = useState('');
+  const [sendError, setSendError] = useState('');
   const esRef = useRef<EventSource | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -128,8 +129,13 @@ export function AgentChat({ siteId }: { siteId: number }) {
     e.preventDefault();
     const text = draft.trim();
     if (text === '') return;
-    setDraft('');
-    await agentSend(siteId, text); // optimistic render not needed: the 'user' event echoes over SSE
+    try {
+      await agentSend(siteId, text); // optimistic render not needed: the 'user' event echoes over SSE
+      setDraft('');
+      setSendError('');
+    } catch (err) {
+      setSendError(err instanceof ApiError ? err.message : 'Could not send — try again.');
+    }
   }
 
   async function newSession() {
@@ -198,6 +204,7 @@ export function AgentChat({ siteId }: { siteId: number }) {
             <div className="chat__msg chat__msg--agent">{streamText}<span className="chat__caret" /></div>
           </div>
         )}
+        {sendError !== '' && <div className="chat__status chat__status--error mono">{sendError}</div>}
       </div>
 
       <div className="chat__composer">
