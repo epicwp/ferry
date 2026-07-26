@@ -88,8 +88,16 @@ export function AgentChat({ siteId }: { siteId: number }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const connect = useCallback(async () => {
+    esRef.current?.close(); // close any prior connection first — native EventSource auto-retries otherwise, doubling live events
     setConn('connecting');
-    const history = await agentHistory(siteId);
+    setStreamText(''); // don't leave a stale in-flight bubble stuck if the turn finished while we were disconnected
+    let history;
+    try {
+      history = await agentHistory(siteId);
+    } catch {
+      setConn('lost'); // history fetch failed — surface the visible lost state + Reconnect instead of hanging on 'connecting'
+      return;
+    }
     setEvents(history.events);
     const lastSeq = history.events.at(-1)?.seq ?? 0;
     const es = new EventSource(`/api/sites/${siteId}/agent/events?after=${lastSeq}`);
@@ -128,8 +136,7 @@ export function AgentChat({ siteId }: { siteId: number }) {
     await agentNewSession(siteId);
     setEvents([]);
     setStreamText('');
-    esRef.current?.close();
-    void connect();
+    void connect(); // connect() now closes any prior EventSource itself
   }
 
   const blocks = buildBlocks(events);
