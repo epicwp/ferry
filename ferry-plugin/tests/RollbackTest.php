@@ -184,4 +184,53 @@ final class RollbackTest extends TestCase
 
         $this->assertGreaterThanOrEqual(time() - 5, filemtime($backupDir));
     }
+
+    // ---- review fix (round 3): a failed restore rename must not read as success ----
+
+    public function test_rollback_treats_a_failed_restore_rename_as_a_conflict_not_success(): void
+    {
+        file_put_contents($this->root . '/wp-content/themes/t/a.css', 'old content');
+        Staging::add($this->root, $this->txid, [$this->stagedFile('wp-content/themes/t/a.css', 'new content')]);
+        $files = [
+            ['path' => 'wp-content/themes/t/a.css', 'new_hash' => $this->sha('new content'), 'old_hash' => $this->sha('old content')],
+        ];
+        $committed = Commit::run($this->root, new FakeWpdb([]), $this->txid, $files, [], [], false);
+        $this->assertTrue($committed['committed'], 'fixture setup: commit must succeed');
+
+        // Obstruct the restore rename's destination: no write/execute permission on the
+        // target's parent means rename() into it fails.
+        $parent = $this->root . '/wp-content/themes/t';
+        chmod($parent, 0555);
+        if (is_writable($parent)) {
+            chmod($parent, 0777); // undo before skipping, so tearDown's rm -rf still works
+            $this->markTestSkipped('running as a user that bypasses filesystem permissions (e.g. root) - chmod does not restrict writes here');
+        }
+
+        try {
+            $result = Commit::rollback($this->root, new FakeWpdb([]), $this->txid, []);
+
+            $this->assertFalse($result['rolled_back']);
+            $this->assertSame([
+                ['key' => 'wp-content/themes/t/a.css', 'expected' => 'restorable', 'found' => 'rename_failed'],
+            ], $result['conflicts']);
+            $this->assertSame('dirty', Tx::read($this->root, $this->txid)['status']); // stuck rolling_back
+            // Nothing lost: the pushed content still stands, backup is still there to retry from.
+            $this->assertSame('new content', file_get_contents($this->root . '/wp-content/themes/t/a.css'));
+            $this->assertSame(
+                'old content',
+                file_get_contents(Staging::backup_dir($this->root, $this->txid) . '/files/wp-content/themes/t/a.css')
+            );
+        } finally {
+            chmod($parent, 0777); // always restore, even if an assertion above failed
+        }
+
+        // Retry - the idempotent CAS makes this safe now that the permission is fixed, and
+        // it must complete.
+        $retry = Commit::rollback($this->root, new FakeWpdb([]), $this->txid, []);
+
+        $this->assertTrue($retry['rolled_back']);
+        $this->assertSame([], $retry['conflicts']);
+        $this->assertSame('old content', file_get_contents($this->root . '/wp-content/themes/t/a.css'));
+        $this->assertSame('rolled_back', Tx::read($this->root, $this->txid)['status']);
+    }
 }

@@ -230,29 +230,45 @@ final class Commit
 
         $restored = [];  // existed=true: backup/files/<path> -> target
         $discarded = []; // existed=false: target -> backup/discarded/<path>
+        $failedPath = null;
         foreach ($pending as $f) {
             $path = (string) $f['path'];
             $abs = $root . '/' . $path;
             if ($f['existed']) {
                 self::ensure_parent_dir($abs);
-                @rename($backupDir . '/files/' . $path, $abs);
+                if (!@rename($backupDir . '/files/' . $path, $abs)) {
+                    $failedPath = $path;
+                    break;
+                }
                 $restored[] = $path;
             } elseif (is_file($abs)) {
                 $discardPath = $backupDir . '/discarded/' . $path;
                 self::ensure_parent_dir($discardPath);
-                @rename($abs, $discardPath);
+                if (!@rename($abs, $discardPath)) {
+                    $failedPath = $path;
+                    break;
+                }
                 $discarded[] = $path;
             }
+        }
+        if ($failedPath !== null) {
+            // Reverse whatever this attempt did manage to move; meta is left at
+            // "rolling_back" (already written above) rather than reset - /tx reads that as
+            // "dirty", inviting a retry, and the idempotent CAS above makes a retry safe
+            // regardless of how much this attempt actually reversed.
+            self::undo_restore($root, $backupDir, $restored, $discarded);
+            return ['rolled_back' => false, 'conflicts' => [
+                ['key' => $failedPath, 'expected' => 'restorable', 'found' => 'rename_failed'],
+            ]];
         }
 
         $dbResult = DbOps::apply_in_transaction($wpdb, $ops, [], $wpdb->prefix, false);
         if (!$dbResult['committed']) {
-            foreach (array_reverse($discarded) as $path) {
-                @rename($backupDir . '/discarded/' . $path, $root . '/' . $path);
-            }
-            foreach (array_reverse($restored) as $path) {
-                @rename($root . '/' . $path, $backupDir . '/files/' . $path);
-            }
+            // Best-effort, unchecked: this is the double-failure path (DB apply failed, and
+            // we're now reversing an already-successful file restore). If a reversal rename
+            // fails here too, there is no further recovery layer to fall back to - the
+            // status write below is the only signal this rollback attempt leaves behind.
+            self::undo_restore($root, $backupDir, $restored, $discarded);
             $meta['status'] = 'committed'; // rollback did not happen - restore the prior status
             Tx::write($root, $txid, $meta);
             return ['rolled_back' => false, 'conflicts' => $dbResult['conflicts']];
@@ -261,6 +277,19 @@ final class Commit
         $meta['status'] = 'rolled_back';
         Tx::write($root, $txid, $meta);
         return ['rolled_back' => true, 'conflicts' => []];
+    }
+
+    /** Reverses whatever a rollback attempt moved so far, most-recent first. Best-effort
+     *  (unchecked): called only from failure branches that already have no further recovery
+     *  to offer - the caller's own status write (or lack of one) is the actual signal. */
+    private static function undo_restore(string $root, string $backupDir, array $restored, array $discarded): void
+    {
+        foreach (array_reverse($discarded) as $path) {
+            @rename($backupDir . '/discarded/' . $path, $root . '/' . $path);
+        }
+        foreach (array_reverse($restored) as $path) {
+            @rename($root . '/' . $path, $backupDir . '/files/' . $path);
+        }
     }
 
     /** @return array<int, array{path:string, code:string}> */
