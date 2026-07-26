@@ -1,7 +1,10 @@
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import { AgentManager } from './agent/manager.js';
+import type { AgentRunner } from './agent/types.js';
 import type { Engine } from './engine.js';
+import { agentRoutes } from './routes/agent.js';
 import { authRoutes } from './routes/auth.js';
 import { siteRoutes } from './routes/sites.js';
 import { syncRoutes } from './routes/sync.js';
@@ -15,6 +18,12 @@ export interface AppDeps {
   engine?: Engine;   // wired in Task 5
   pluginZip?: Buffer; // wired in Task 7
   staticDir?: string; // built dashboard (prod mode); dev uses the Vite proxy instead
+  agent?: {
+    runner: AgentRunner;
+    cloneDir: (slug: string) => string;
+    ensureBranch: (cloneDir: string) => Promise<void>;
+    idleMs?: number;
+  };
 }
 
 declare module 'fastify' {
@@ -57,7 +66,16 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   authRoutes(app, deps);
   siteRoutes(app, deps);
   if (deps.engine) {
-    syncRoutes(app, deps, new SyncManager(deps.store, deps.engine));
+    const sync = new SyncManager(deps.store, deps.engine);
+    const agents = deps.agent
+      ? new AgentManager(deps.store, deps.agent.runner, {
+          cloneDir: deps.agent.cloneDir,
+          ensureBranch: deps.agent.ensureBranch,
+          idleMs: deps.agent.idleMs,
+        })
+      : undefined;
+    syncRoutes(app, deps, sync, agents);
+    if (agents) agentRoutes(app, deps, agents, sync);
   }
 
   app.get('/api/plugin.zip', { preHandler: app.requireUser }, async (_request, reply) => {

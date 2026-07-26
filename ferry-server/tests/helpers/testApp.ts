@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { AgentRunner } from '../../src/agent/types.js';
 import type { Engine } from '../../src/engine.js';
 import { buildApp, type AppDeps } from '../../src/app.js';
 import { Store } from '../../src/store.js';
@@ -24,5 +25,14 @@ export function stubEngine(overrides: Partial<Engine> = {}): Engine {
     verifyClone: () => Promise.reject(new Error('not stubbed')),
     cloneUrl: (slug: string) => `https://${slug}.ddev.site`,
     ...overrides,
+  };
+}
+
+export function agentDeps(runner: AgentRunner, idleMs = 60_000) {
+  return {
+    runner,
+    cloneDir: (slug: string) => `/clones/${slug}`,
+    ensureBranch: async () => undefined,
+    idleMs,
   };
 }
