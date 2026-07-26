@@ -173,8 +173,20 @@ assistant block; the following `agent_text` event is the authoritative text).
 
 ## Cost accounting
 
-`turn_end` events carry `totalCostUsd` + token usage per turn (SDK `result` message).
-Per-site/per-session cost = SQL sum over events — no separate billing table in v1.
+`turn_end` events carry `totalCostUsd` + token usage (SDK `result` message).
+
+**`totalCostUsd` is cumulative per SDK session, not per turn** — measured in the 2026-07-26
+acceptance run (runbook step 7): a fresh session's trivial turn cost $0.0400, while an equally
+trivial follow-up in an established session reported $0.1575 (the session's running total),
+against $0.1441 for that session's first turn. Therefore:
+
+- **Per-session cost = MAX(`totalCostUsd`) over that session's `turn_end` events** — never SUM,
+  which would multiply-count every multi-turn session.
+- **Per-site cost = sum of those per-session maxima.**
+- Per-turn cost, if ever needed, is the delta between consecutive `turn_end` values within a
+  session. Token counts (`inputTokens`/`outputTokens`) are per-turn as recorded.
+
+No separate billing table in v1.
 
 ## Testing & acceptance
 
