@@ -53,7 +53,7 @@ final class Auth
 
     // ---- signatures (pure, mirror of ferry-cli/src/signing.ts) ----
 
-    public static function canonical(string $method, string $route, array $query, string $body, int $timestamp): string
+    public static function canonical(string $method, string $route, array $query, string $body, int $timestamp, string $nonce): string
     {
         unset($query['rest_route'], $query['_locale']);
         ksort($query);
@@ -61,23 +61,26 @@ final class Auth
         foreach ($query as $k => $v) {
             $pairs[] = rawurlencode((string) $k) . '=' . rawurlencode((string) $v);
         }
-        return strtoupper($method) . "\n" . $route . "\n" . implode('&', $pairs) . "\n" . $body . "\n" . $timestamp;
+        return strtoupper($method) . "\n" . $route . "\n" . implode('&', $pairs) . "\n" . $body . "\n" . $timestamp . "\n" . $nonce;
     }
 
-    public static function sign(string $secret, string $method, string $route, array $query, string $body, int $timestamp): string
+    public static function sign(string $secret, string $method, string $route, array $query, string $body, int $timestamp, string $nonce): string
     {
-        return hash_hmac('sha256', self::canonical($method, $route, $query, $body, $timestamp), $secret);
+        return hash_hmac('sha256', self::canonical($method, $route, $query, $body, $timestamp, $nonce), $secret);
     }
 
-    public static function verify(string $secret, string $method, string $route, array $query, string $body, $timestamp, $signature, int $now): bool
+    public static function verify(string $secret, string $method, string $route, array $query, string $body, $timestamp, $signature, $nonce, int $now): bool
     {
         if (!is_string($timestamp) || !is_string($signature) || $timestamp === '' || $signature === '') {
+            return false;
+        }
+        if (!is_string($nonce) || $nonce === '') {
             return false;
         }
         if (abs($now - (int) $timestamp) > self::SIGNATURE_WINDOW) {
             return false;
         }
-        $expected = self::sign($secret, $method, $route, $query, $body, (int) $timestamp);
+        $expected = self::sign($secret, $method, $route, $query, $body, (int) $timestamp, $nonce);
         return hash_equals($expected, strtolower($signature));
     }
 }

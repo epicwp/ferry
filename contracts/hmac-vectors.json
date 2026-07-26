@@ -8,7 +8,8 @@
       "query": { "after": "0" },
       "body": "",
       "timestamp": 1753351200,
-      "expected": "49932caecd43868dbecc742a2c7f0c6035af201a1359137b0c2743ccc8063d9f"
+      "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "f6af62b3f0752c6bea945595e048d2da1d27ee98bf4abb65891c7aaf40220e2c"
     },
     {
       "name": "post-files",
@@ -17,7 +18,8 @@
       "query": {},
       "body": "{\"paths\":[\"wp-load.php\"]}",
       "timestamp": 1753351260,
-      "expected": "3b150e5ba131fd206d9f59207a245886bf64ceb6c9ec962799e72c7e861c64ec"
+      "nonce": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expected": "2931ee6bf852d0123b8949a7cf0fb6aeb2d1c18f930330515692dc62bdfbfa78"
     },
     {
       "name": "get-db-sorted-query",
@@ -26,7 +28,8 @@
       "query": { "table": "wp_posts", "after": "0", "before": "4210" },
       "body": "",
       "timestamp": 1753351320,
-      "expected": "116e6aee9032361b14b1be1ed2590021080fa68b639f167d1eef1449b7039c69"
+      "nonce": "cccccccccccccccccccccccccccccccc",
+      "expected": "cd235f7c9de8b8fcef62019ee18b4ee38fd29e1b262ea68dc7961fabdd7cfc84"
     },
     {
       "name": "rfc3986-encoding-edge",
@@ -35,7 +38,8 @@
       "query": { "path": "wp-content/themes/x y/f'(1)!.php" },
       "body": "",
       "timestamp": 1753351380,
-      "expected": "62a218d9e3bd0362901f92c1c87b372f26f17711dc5a839e2ee518b9a5120e28"
+      "nonce": "dddddddddddddddddddddddddddddddd",
+      "expected": "8034bbb8819fa0f827b7b1c76859c9d90cb9ff9b01176e4d5b7e0660c848dc7c"
     }
   ]
 }

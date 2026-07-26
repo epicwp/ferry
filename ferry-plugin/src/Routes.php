@@ -33,6 +33,7 @@ final class Routes
         if (!$secret) {
             return new \WP_Error('ferry_unpaired', 'This site is not paired yet. Activate the plugin and pair with the code it shows.', ['status' => 403]);
         }
+        $nonce = $request->get_header('X-Ferry-Nonce');
         $ok = Auth::verify(
             $secret,
             $request->get_method(),
@@ -41,9 +42,17 @@ final class Routes
             $request->get_body(),
             $request->get_header('X-Ferry-Timestamp'),
             $request->get_header('X-Ferry-Signature'),
+            $nonce,
             time()
         );
-        return $ok ? true : new \WP_Error('ferry_bad_signature', 'Invalid or expired request signature.', ['status' => 401]);
+        if (!$ok) {
+            return new \WP_Error('ferry_bad_signature', 'Invalid or expired request signature.', ['status' => 401]);
+        }
+        global $wpdb;
+        if (!Nonces::consume($wpdb, $wpdb->prefix, (string) $nonce, time())) {
+            return new \WP_Error('ferry_replay', 'Request nonce already used or invalid.', ['status' => 401]);
+        }
+        return true;
     }
 
     public static function pair(\WP_REST_Request $request)
