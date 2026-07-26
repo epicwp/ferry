@@ -17,6 +17,7 @@ interface Hot { sessionId: number; handle: AgentHandle; idleTimer?: NodeJS.Timeo
  */
 export class AgentManager {
   private hot = new Map<number, Hot>();
+  private spawning = new Map<number, Promise<Hot>>();
   private listeners = new Map<number, Set<Listener>>();
   private readonly idleMs: number;
 
@@ -54,6 +55,15 @@ export class AgentManager {
   }
 
   async newSession(site: Site): Promise<void> {
+    // First, wait for any in-flight spawn to complete, then close it
+    const inFlight = this.spawning.get(site.id);
+    if (inFlight) {
+      const hot = await inFlight;
+      clearTimeout(hot.idleTimer);
+      this.hot.delete(site.id);
+      await hot.handle.interrupt().catch(() => undefined);
+      await hot.handle.close().catch(() => undefined);
+    }
     const hot = this.hot.get(site.id);
     if (hot) {
       clearTimeout(hot.idleTimer);
@@ -76,6 +86,20 @@ export class AgentManager {
   }
 
   private async ensureHot(site: Site, sessionId: number, sdkSessionId: string | null): Promise<Hot> {
+    // If spawn already in flight for this site, await it and validate
+    const inFlight = this.spawning.get(site.id);
+    if (inFlight) {
+      const hot = await inFlight;
+      if (hot.sessionId === sessionId) {
+        return hot;
+      }
+      // Superseded - close and fall through to spawn fresh
+      clearTimeout(hot.idleTimer);
+      this.hot.delete(site.id);
+      await hot.handle.close().catch(() => undefined);
+    }
+
+    // Check current hot (it might have been set while we awaited inFlight or earlier)
     const existing = this.hot.get(site.id);
     if (existing && existing.sessionId === sessionId) return existing;
     if (existing) {
@@ -83,17 +107,28 @@ export class AgentManager {
       this.hot.delete(site.id);
       await existing.handle.close().catch(() => undefined);
     }
-    const cloneDir = this.opts.cloneDir(site.slug);
-    await this.opts.ensureBranch(cloneDir);
-    const hot: Hot = { sessionId, handle: undefined as unknown as AgentHandle };
-    hot.handle = this.runner.start({
-      cloneDir,
-      slug: site.slug,
-      resumeSdkSessionId: sdkSessionId ?? undefined,
-      onEvent: (event) => this.onRunnerEvent(site.id, sessionId, event),
-    });
-    this.hot.set(site.id, hot);
-    return hot;
+
+    // Create spawn promise and register it BEFORE starting async work
+    const spawnPromise = (async () => {
+      const cloneDir = this.opts.cloneDir(site.slug);
+      await this.opts.ensureBranch(cloneDir);
+      const hot: Hot = { sessionId, handle: undefined as unknown as AgentHandle };
+      hot.handle = this.runner.start({
+        cloneDir,
+        slug: site.slug,
+        resumeSdkSessionId: sdkSessionId ?? undefined,
+        onEvent: (event) => this.onRunnerEvent(site.id, sessionId, event),
+      });
+      this.hot.set(site.id, hot);
+      return hot;
+    })();
+
+    this.spawning.set(site.id, spawnPromise);
+    try {
+      return await spawnPromise;
+    } finally {
+      this.spawning.delete(site.id);
+    }
   }
 
   private onRunnerEvent(siteId: number, sessionId: number, event: RunnerEvent): void {

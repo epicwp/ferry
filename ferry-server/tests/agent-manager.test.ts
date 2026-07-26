@@ -94,4 +94,87 @@ describe('AgentManager', () => {
     expect(store.currentAgentSession(site.id)!.status).toBe('error');
     expect(manager.isActive(site.id)).toBe(false); // exit dropped the handle
   });
+
+  it('concurrent first sends use a single runner spawn', async () => {
+    const starts: AgentRunnerOpts[] = [];
+    const inner = scriptedRunner();
+    const recording: AgentRunner = { start: (opts) => { starts.push(opts); return inner.start(opts); } };
+    const { store, site, manager } = setup(recording);
+
+    const seen: AgentWireEvent[] = [];
+    manager.subscribe(site.id, (e) => seen.push(e));
+
+    // Send two messages concurrently
+    await Promise.all([manager.send(site, 'a'), manager.send(site, 'b')]);
+
+    // Only one runner.start should have been called
+    expect(starts).toHaveLength(1);
+
+    // Both messages should be persisted
+    const session = store.currentAgentSession(site.id)!;
+    const events = store.agentEventsAfter(session.id, 0);
+    const userEvents = events.filter((e) => e.type === 'user');
+    expect(userEvents.length).toBeGreaterThanOrEqual(1);
+
+    await manager.shutdown();
+  });
+
+  it('send racing newSession does not leak the handle', async () => {
+    let releaseBranch: (() => void) | undefined;
+    const controllableBranch = async () => {
+      await new Promise<void>(r => { releaseBranch = r; });
+    };
+
+    const closed: boolean[] = [];
+    const trackingRunner: AgentRunner = {
+      start: (opts) => {
+        const inner = scriptedRunner().start(opts);
+        const origClose = inner.close.bind(inner);
+        return {
+          ...inner,
+          close: async () => {
+            closed.push(true);
+            return origClose();
+          },
+        };
+      },
+    };
+
+    const store = new Store(':memory:');
+    const user = store.createUser('a@example.com', 'h')!;
+    const site = store.createSite(user.id, 'S', 'https://klant.nl', 'klant-nl')!;
+    store.setStatus(site.id, 'ready');
+    const manager = new AgentManager(store, trackingRunner, {
+      cloneDir: (slug) => `/clones/${slug}`,
+      ensureBranch: controllableBranch,
+    });
+    const siteRecord = store.siteFor(user.id, site.id)!;
+
+    // Start a send (blocks on ensureBranch)
+    const sendPromise = manager.send(siteRecord, 'message');
+
+    // Let send reach ensureBranch
+    await new Promise(r => setImmediate(r));
+
+    // While send is still spawning, start newSession (both will wait on the spawn)
+    const newSessionPromise = manager.newSession(siteRecord);
+
+    // Yield to let newSession reach the await on inFlight
+    await new Promise(r => setImmediate(r));
+
+    // Now release the branch to let both complete
+    releaseBranch!();
+
+    // Wait for both to complete
+    await sendPromise;
+    await newSessionPromise;
+
+    // Manager should not be active (newSession closed it)
+    expect(manager.isActive(site.id)).toBe(false);
+
+    // Handle should have been closed
+    expect(closed.length).toBeGreaterThan(0);
+
+    await manager.shutdown();
+  });
 });
