@@ -165,7 +165,8 @@ export class AgentManager {
         this.store.touchAgentSession(sessionId);
         return;
       case 'runner_error':
-        this.persistAndEmit(siteId, sessionId, 'status', { state: 'error', detail: event.message });
+        console.error(`agent runner error (site ${siteId}, session ${sessionId}):`, event.message);
+        this.persistAndEmit(siteId, sessionId, 'status', { state: 'error', detail: 'The agent hit an internal error — try again or start a new session.' });
         this.store.setAgentSessionStatus(sessionId, 'error');
         return;
       case 'exit': {

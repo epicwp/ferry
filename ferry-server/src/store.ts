@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS agent_events (
   payload TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_agent_events_session ON agent_events(session_id);
 `;
 
 interface SiteRow {
@@ -129,6 +130,13 @@ export class Store {
 
   close(): void {
     this.db.close();
+  }
+
+  indexExists(name: string): boolean {
+    const result = this.db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type='index' AND name = ?"
+    ).get(name);
+    return !!result;
   }
 
   createUser(email: string, passwordHash: string): User | undefined {

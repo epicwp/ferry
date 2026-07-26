@@ -73,4 +73,8 @@ describe('Store', () => {
     expect(() => store.createUser('x@example.com', 'hash')).toThrow();
     expect(() => store.createSite(1, 'X', 'https://x.example', 'x-example')).toThrow();
   });
+
+  it('creates the agent_events session_id index on fresh database', () => {
+    expect(store.indexExists('idx_agent_events_session')).toBe(true);
+  });
 });
