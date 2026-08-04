@@ -1,11 +1,13 @@
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FerryClient } from '../src/client.js';
 import { saveProfile } from '../src/profile.js';
-import { invertOp, push } from '../src/push.js';
+import { defaultBlobFor, invertOp, push } from '../src/push.js';
 import type { ChangeSpec, DbOp, StepEvent } from '../src/push-types.js';
 
 let home: string;
@@ -185,6 +187,55 @@ describe('push', () => {
     expect(rollbackCall).toBeDefined();
     expect(rollbackCall!.body.txid).toEqual(expect.any(String));
     expect(rollbackCall!.body.ops).toEqual([{ kind: 'option_set', name: 'x', old: 'excl', new: 'incl' }]);
+  });
+
+  it('smoke fail AND rollback itself fails -> honest error outcome, not a false rolled_back', async () => {
+    const base = await listen((req, res) => {
+      res.statusCode = 500;
+      res.end('down');
+    });
+    pair(base);
+    const { client } = fakeClient({
+      stage: [{ staged: ['wp-content/x.php'], rejected: [] }],
+      commit: COMMIT_OK,
+      rollback: { rolled_back: false, conflicts: [{ key: 'option:x', expected: 'excl', found: 'other' }] },
+    });
+    const outcome = await push('site', basicSpec(), { headSha: 'x', client, blobFor });
+
+    expect(outcome.status).toBe('error');
+    if (outcome.status === 'error') {
+      expect(outcome.detail).toContain('option:x');
+      expect(outcome.detail.toLowerCase()).toContain('rollback');
+    }
+  });
+
+  it('defaultBlobFor reads the exact committed bytes - no trim, no UTF-8 mangling', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'ferry-repo-'));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: repo });
+      execFileSync('git', ['config', 'user.email', 'ferry@localhost'], { cwd: repo });
+      execFileSync('git', ['config', 'user.name', 'ferry'], { cwd: repo });
+
+      const textBytes = Buffer.from('hello world\n', 'utf8'); // trailing newline - runGit's .trim() would strip it
+      const binaryBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xbf, 0x00, 0x0a]); // invalid UTF-8
+      writeFileSync(join(repo, 'text.txt'), textBytes);
+      writeFileSync(join(repo, 'binary.bin'), binaryBytes);
+      execFileSync('git', ['add', '-A'], { cwd: repo });
+      execFileSync('git', ['commit', '-q', '-m', 'fixture'], { cwd: repo });
+      const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo }).toString().trim();
+
+      const blobFor = defaultBlobFor(repo, headSha);
+      const gotText = await blobFor('text.txt');
+      const gotBinary = await blobFor('binary.bin');
+
+      const sha256 = (b: Buffer) => createHash('sha256').update(b).digest('hex');
+      expect(sha256(gotText)).toBe(sha256(textBytes));
+      expect(sha256(gotBinary)).toBe(sha256(binaryBytes));
+      expect(gotText.equals(textBytes)).toBe(true);
+      expect(gotBinary.equals(binaryBytes)).toBe(true);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   it('batches files into two /stage calls at the ~2MB base64 boundary', async () => {

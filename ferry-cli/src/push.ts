@@ -1,7 +1,8 @@
+import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { promisify } from 'node:util';
 import { request } from 'undici';
 import { FerryClient } from './client.js';
-import { runGit } from './git.js';
 import { loadProfile } from './profile.js';
 import type { ChangeFile, ChangeSpec, Conflict, DbOp, PushOutcome, PushStep, SmokeCheck, StepEvent } from './push-types.js';
 
@@ -25,8 +26,20 @@ export interface PushOpts {
   blobFor?: (path: string) => Promise<Buffer>;
 }
 
-function defaultBlobFor(clonePath: string, headSha: string): (path: string) => Promise<Buffer> {
-  return async (path: string) => Buffer.from(await runGit(clonePath, ['show', `${headSha}:${path}`]), 'utf8');
+const execFileP = promisify(execFile);
+
+/** Reads the exact committed bytes for `path` at `headSha` - bypasses `runGit` (git.ts), which
+ *  string-decodes and `.trim()`s stdout, corrupting trailing-newline text files and mangling
+ *  binary blobs via UTF-8 replacement. */
+export function defaultBlobFor(clonePath: string, headSha: string): (path: string) => Promise<Buffer> {
+  return async (path: string) => {
+    const { stdout } = await execFileP('git', ['show', `${headSha}:${path}`], {
+      cwd: clonePath,
+      encoding: 'buffer',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    return stdout;
+  };
 }
 
 /** Groups items into batches whose accumulated `size` stays under `maxBytes` - a lone
@@ -135,7 +148,11 @@ export async function push(slug: string, spec: ChangeSpec, opts: PushOpts): Prom
   onStep({ step: 'smoke', status: smokeOk ? 'ok' : 'fail' });
 
   if (!smokeOk) {
-    await rollback(slug, { txid, ops: spec.ops, client });
+    const rb = await rollback(slug, { txid, ops: spec.ops, client });
+    if (!rb.ok) {
+      const conflictKeys = (rb.conflicts ?? []).map((c) => c.key).join(', ');
+      return { status: 'error', txid, detail: `smoke failed AND automatic rollback failed: ${conflictKeys}` };
+    }
     return { status: 'rolled_back', txid, reason: 'smoke_failed', smoke };
   }
   return { status: 'pushed', txid, smoke };
