@@ -23,6 +23,10 @@ export interface AppDeps {
     cloneDir: (slug: string) => string;
     ensureBranch: (cloneDir: string) => Promise<void>;
     idleMs?: number;
+    // Passthroughs for the /changes routes (Task 13) to consume from `deps` directly —
+    // main.ts wires the real ones (ChangeService/journalCandidates); tests inject fakes.
+    journalCandidates?: (slug: string) => Promise<unknown>;
+    createChange?: (slug: string, input: Record<string, unknown>) => Promise<unknown>;
   };
 }
 

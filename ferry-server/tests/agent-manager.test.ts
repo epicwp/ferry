@@ -209,4 +209,25 @@ describe('AgentManager', () => {
 
     await manager.shutdown();
   });
+
+  it('appendSystemEvent persists+emits onto the current session', async () => {
+    const { store, site, manager } = setup(scriptedRunner());
+    await manager.send(site, 'first'); // creates a session
+    const session = store.currentAgentSession(site.id)!;
+    const seen: AgentWireEvent[] = [];
+    manager.subscribe(site.id, (e) => seen.push(e));
+
+    manager.appendSystemEvent(site.id, 'change_card', { changeId: 1, seq: 1, title: 'Fix VAT', status: 'draft' });
+
+    const stored = store.agentEventsAfter(session.id, 0);
+    expect(stored.at(-1)).toMatchObject({ type: 'change_card', payload: { changeId: 1, seq: 1, title: 'Fix VAT', status: 'draft' } });
+    expect(seen).toEqual([{ seq: stored.at(-1)!.seq, type: 'change_card', payload: { changeId: 1, seq: 1, title: 'Fix VAT', status: 'draft' } }]);
+    await manager.shutdown();
+  });
+
+  it('appendSystemEvent no-ops when the site has no session', () => {
+    const { store, site, manager } = setup(scriptedRunner());
+    expect(() => manager.appendSystemEvent(site.id, 'change_card', { changeId: 1 })).not.toThrow();
+    expect(store.currentAgentSession(site.id)).toBeUndefined();
+  });
 });

@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import type { ChangeFile, Conflict, DbOp, Precondition, SmokeCheck } from '../../ferry-cli/src/push-types.js';
 
 export interface User { id: number; email: string; passwordHash: string }
 
@@ -34,6 +35,69 @@ export interface AgentEventRow {
   type: string;
   payload: Record<string, unknown>;
   createdAt: string;
+}
+
+export type ChangeStatus = 'draft' | 'pushing' | 'pushed' | 'conflict' | 'rolled_back' | 'discarded';
+
+export interface Change {
+  id: number;
+  siteId: number;
+  seq: number;
+  status: ChangeStatus;
+  title: string;
+  summary: string;
+  branch: string;
+  baseSha: string;
+  headSha: string;
+  diffText: string;
+  files: ChangeFile[];
+  ops: DbOp[];
+  preconditions: Precondition[];
+  smoke: SmokeCheck[];
+  backupTxid: string | null;
+  prodRef: string | null;
+  conflict: Conflict[] | null;
+  createdAt: string;
+  pushedAt: string | null;
+  rolledBackAt: string | null;
+}
+
+export interface CreateChangeFields {
+  title: string;
+  summary: string;
+  branch: string;
+  baseSha: string;
+  headSha: string;
+  diffText: string;
+  files: ChangeFile[];
+  ops: DbOp[];
+  preconditions: Precondition[];
+  smoke: SmokeCheck[];
+}
+
+export interface SetChangeStatusPatch {
+  backupTxid?: string | null;
+  prodRef?: string | null;
+  conflict?: Conflict[] | null;
+  pushedAt?: string;
+  rolledBackAt?: string;
+}
+
+export interface PushRun {
+  id: number;
+  changeId: number;
+  status: string;
+  steps: unknown[];
+  logText: string;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface UpdatePushRunPatch {
+  status?: string;
+  steps?: unknown[];
+  logText?: string;
+  finishedAt?: string;
 }
 
 const SCHEMA = `
@@ -76,6 +140,22 @@ CREATE TABLE IF NOT EXISTS agent_events (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_agent_events_session ON agent_events(session_id);
+CREATE TABLE IF NOT EXISTS changes (
+  id INTEGER PRIMARY KEY, site_id INTEGER NOT NULL REFERENCES sites(id),
+  seq INTEGER NOT NULL, status TEXT NOT NULL,
+  title TEXT NOT NULL, summary TEXT NOT NULL, branch TEXT NOT NULL,
+  base_sha TEXT NOT NULL, head_sha TEXT NOT NULL, diff_text TEXT NOT NULL,
+  files_json TEXT NOT NULL, ops_json TEXT NOT NULL,
+  preconditions_json TEXT NOT NULL, smoke_json TEXT NOT NULL,
+  backup_txid TEXT, prod_ref TEXT, conflict_json TEXT,
+  created_at TEXT NOT NULL, pushed_at TEXT, rolled_back_at TEXT,
+  UNIQUE(site_id, seq)
+);
+CREATE TABLE IF NOT EXISTS push_runs (
+  id INTEGER PRIMARY KEY, change_id INTEGER NOT NULL REFERENCES changes(id),
+  status TEXT NOT NULL, steps_json TEXT NOT NULL, log_text TEXT NOT NULL,
+  started_at TEXT NOT NULL, finished_at TEXT
+);
 `;
 
 interface SiteRow {
@@ -100,6 +180,15 @@ interface AgentEventRowRaw {
   created_at: string;
 }
 
+interface ChangeRow {
+  id: number; site_id: number; seq: number; status: string;
+  title: string; summary: string; branch: string;
+  base_sha: string; head_sha: string; diff_text: string;
+  files_json: string; ops_json: string; preconditions_json: string; smoke_json: string;
+  backup_txid: string | null; prod_ref: string | null; conflict_json: string | null;
+  created_at: string; pushed_at: string | null; rolled_back_at: string | null;
+}
+
 function isConstraintError(err: unknown): boolean {
   return err instanceof Error && String((err as { code?: unknown }).code ?? '').startsWith('SQLITE_CONSTRAINT');
 }
@@ -116,6 +205,21 @@ function toAgentSession(row: AgentSessionRow): AgentSession {
   return {
     id: row.id, siteId: row.site_id, sdkSessionId: row.sdk_session_id,
     status: row.status as AgentSessionStatus, createdAt: row.created_at, lastActivityAt: row.last_activity_at,
+  };
+}
+
+function toChange(row: ChangeRow): Change {
+  return {
+    id: row.id, siteId: row.site_id, seq: row.seq, status: row.status as ChangeStatus,
+    title: row.title, summary: row.summary, branch: row.branch,
+    baseSha: row.base_sha, headSha: row.head_sha, diffText: row.diff_text,
+    files: JSON.parse(row.files_json) as ChangeFile[],
+    ops: JSON.parse(row.ops_json) as DbOp[],
+    preconditions: JSON.parse(row.preconditions_json) as Precondition[],
+    smoke: JSON.parse(row.smoke_json) as SmokeCheck[],
+    backupTxid: row.backup_txid, prodRef: row.prod_ref,
+    conflict: row.conflict_json ? (JSON.parse(row.conflict_json) as Conflict[]) : null,
+    createdAt: row.created_at, pushedAt: row.pushed_at, rolledBackAt: row.rolled_back_at,
   };
 }
 
@@ -266,5 +370,94 @@ export class Store {
 
   recoverInterruptedAgentSessions(): number {
     return this.db.prepare("UPDATE agent_sessions SET status = 'idle' WHERE status = 'running'").run().changes;
+  }
+
+  createChange(siteId: number, fields: CreateChangeFields): Change {
+    const now = new Date().toISOString();
+    const insert = this.db.transaction((): number => {
+      const { next } = this.db
+        .prepare('SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM changes WHERE site_id = ?')
+        .get(siteId) as { next: number };
+      const info = this.db
+        .prepare(
+          `INSERT INTO changes (
+             site_id, seq, status, title, summary, branch, base_sha, head_sha, diff_text,
+             files_json, ops_json, preconditions_json, smoke_json, created_at
+           ) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          siteId, next, fields.title, fields.summary, fields.branch, fields.baseSha, fields.headSha, fields.diffText,
+          JSON.stringify(fields.files), JSON.stringify(fields.ops),
+          JSON.stringify(fields.preconditions), JSON.stringify(fields.smoke), now,
+        );
+      return Number(info.lastInsertRowid);
+    });
+    return this.changeById(insert())!;
+  }
+
+  private changeById(id: number): Change | undefined {
+    const row = this.db.prepare('SELECT * FROM changes WHERE id = ?').get(id) as ChangeRow | undefined;
+    return row ? toChange(row) : undefined;
+  }
+
+  changesFor(siteId: number, status?: ChangeStatus): Change[] {
+    const rows = status
+      ? (this.db.prepare('SELECT * FROM changes WHERE site_id = ? AND status = ? ORDER BY seq').all(siteId, status) as ChangeRow[])
+      : (this.db.prepare('SELECT * FROM changes WHERE site_id = ? ORDER BY seq').all(siteId) as ChangeRow[]);
+    return rows.map(toChange);
+  }
+
+  changeBySeq(siteId: number, seq: number): Change | undefined {
+    const row = this.db.prepare('SELECT * FROM changes WHERE site_id = ? AND seq = ?').get(siteId, seq) as ChangeRow | undefined;
+    return row ? toChange(row) : undefined;
+  }
+
+  setChangeStatus(id: number, status: ChangeStatus, patch: SetChangeStatusPatch = {}): void {
+    this.db.prepare('UPDATE changes SET status = ? WHERE id = ?').run(status, id);
+    if ('backupTxid' in patch) {
+      this.db.prepare('UPDATE changes SET backup_txid = ? WHERE id = ?').run(patch.backupTxid, id);
+    }
+    if ('prodRef' in patch) {
+      this.db.prepare('UPDATE changes SET prod_ref = ? WHERE id = ?').run(patch.prodRef, id);
+    }
+    if ('conflict' in patch) {
+      this.db.prepare('UPDATE changes SET conflict_json = ? WHERE id = ?').run(patch.conflict ? JSON.stringify(patch.conflict) : null, id);
+    }
+    if (patch.pushedAt !== undefined) {
+      this.db.prepare('UPDATE changes SET pushed_at = ? WHERE id = ?').run(patch.pushedAt, id);
+    }
+    if (patch.rolledBackAt !== undefined) {
+      this.db.prepare('UPDATE changes SET rolled_back_at = ? WHERE id = ?').run(patch.rolledBackAt, id);
+    }
+  }
+
+  createPushRun(changeId: number, status: string): PushRun {
+    const now = new Date().toISOString();
+    const info = this.db
+      .prepare('INSERT INTO push_runs (change_id, status, steps_json, log_text, started_at) VALUES (?, ?, ?, ?, ?)')
+      .run(changeId, status, '[]', '', now);
+    return { id: Number(info.lastInsertRowid), changeId, status, steps: [], logText: '', startedAt: now, finishedAt: null };
+  }
+
+  updatePushRun(id: number, patch: UpdatePushRunPatch): void {
+    if (patch.status !== undefined) {
+      this.db.prepare('UPDATE push_runs SET status = ? WHERE id = ?').run(patch.status, id);
+    }
+    if (patch.steps !== undefined) {
+      this.db.prepare('UPDATE push_runs SET steps_json = ? WHERE id = ?').run(JSON.stringify(patch.steps), id);
+    }
+    if (patch.logText !== undefined) {
+      this.db.prepare('UPDATE push_runs SET log_text = ? WHERE id = ?').run(patch.logText, id);
+    }
+    if (patch.finishedAt !== undefined) {
+      this.db.prepare('UPDATE push_runs SET finished_at = ? WHERE id = ?').run(patch.finishedAt, id);
+    }
+  }
+
+  recoverInterruptedPushes(): { changeId: number; backupTxid: string | null }[] {
+    const rows = this.db
+      .prepare("SELECT id, backup_txid FROM changes WHERE status = 'pushing'")
+      .all() as { id: number; backup_txid: string | null }[];
+    return rows.map((r) => ({ changeId: r.id, backupTxid: r.backup_txid }));
   }
 }

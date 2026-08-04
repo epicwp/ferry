@@ -180,6 +180,14 @@ export class AgentManager {
     }
   }
 
+  /** Persist+emit onto the current session (e.g. a change_card from ChangeService.create);
+   *  no-op when the site has no session yet - there's nothing live to attach the event to. */
+  appendSystemEvent(siteId: number, type: string, payload: Record<string, unknown>): void {
+    const session = this.store.currentAgentSession(siteId);
+    if (!session) return;
+    this.persistAndEmit(siteId, session.id, type, payload);
+  }
+
   private persistAndEmit(siteId: number, sessionId: number, type: string, payload: Record<string, unknown>): void {
     const row = this.store.appendAgentEvent(sessionId, type, payload);
     this.emit(siteId, { seq: row.seq, type, payload });

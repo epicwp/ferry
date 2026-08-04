@@ -1,8 +1,11 @@
 import { createSdkMcpServer, query, tool } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+import { DdevEnv } from '../../../ferry-cli/src/env/ddev.js';
 import { fetchUploads as realFetchUploads } from '../../../ferry-cli/src/fetch-uploads.js';
+import { journalCandidates as realJournalCandidates } from '../../../ferry-cli/src/journal.js';
 import { loadProfile as realLoadProfile } from '../../../ferry-cli/src/profile.js';
+import type { DbOp, RiskClass } from '../../../ferry-cli/src/push-types.js';
 import { groundRules } from './ground-rules.js';
 import { normalizeSdkMessage } from './normalize.js';
 import type { AgentHandle, AgentRunner, AgentRunnerOpts } from './types.js';
@@ -14,9 +17,19 @@ export interface SdkRunnerConfig {
   configDir: string;
 }
 
+export interface CreateChangeToolInput {
+  title: string;
+  summary: string;
+  ops: Record<string, unknown>[];
+  preconditions: Record<string, unknown>[];
+  smoke: { label: string; path: string; expectStatus: number; expectText?: string }[];
+}
+
 export interface SdkRunnerDeps {
   fetchUploads: (slug: string, opts: { prefix?: string; all?: boolean }) => Promise<unknown>;
   loadProfile: (slug: string) => { url: string; info?: unknown };
+  journalCandidates: (slug: string) => Promise<{ ops: { op: DbOp; risk: RiskClass }[]; refusedCount: number; noiseCount: number }>;
+  createChange: (slug: string, input: CreateChangeToolInput) => Promise<unknown>;
 }
 
 const text = (s: string) => ({ content: [{ type: 'text' as const, text: s }] });
@@ -63,6 +76,22 @@ export function buildFerryTools(slug: string, deps: SdkRunnerDeps): unknown[] {
         }));
       },
     ),
+    tool(
+      'db_journal',
+      'Typed DB operations recorded in the clone since the last sync — candidates for a change. Curate: include only ops that belong to your fix.',
+      {},
+      async () => text(JSON.stringify(await deps.journalCandidates(slug))),
+    ),
+    tool(
+      'create_change',
+      'Create a draft change card from your committed work on agent/work. The human pushes; you cannot.',
+      {
+        title: z.string().min(4), summary: z.string().min(10),
+        ops: z.array(z.record(z.string(), z.unknown())), preconditions: z.array(z.record(z.string(), z.unknown())),
+        smoke: z.array(z.object({ label: z.string(), path: z.string(), expectStatus: z.number(), expectText: z.string().optional() })),
+      },
+      async (args: CreateChangeToolInput) => text(JSON.stringify(await deps.createChange(slug, args))),
+    ),
   ];
 }
 
@@ -87,6 +116,13 @@ export function sdkRunner(config: SdkRunnerConfig, depsOverride?: Partial<SdkRun
   const deps: SdkRunnerDeps = {
     fetchUploads: (slug, opts) => realFetchUploads(slug, opts),
     loadProfile: (slug) => realLoadProfile(slug),
+    journalCandidates: (slug) => realJournalCandidates(slug, new DdevEnv()),
+    // Unlike the deps above (pure functions of `slug`), a real create_change needs to reach
+    // the live AgentManager (for appendSystemEvent's SSE fan-out) and the server's Store —
+    // neither of which this leaf module knows about. The caller (main.ts) must override this.
+    createChange: () => {
+      throw new Error('create_change is not wired — sdkRunner() needs a createChange override.');
+    },
     ...depsOverride,
   };
   return {
