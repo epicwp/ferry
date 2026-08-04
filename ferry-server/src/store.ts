@@ -296,6 +296,20 @@ export class Store {
     return row ? toSite(row) : undefined;
   }
 
+  /** Unscoped by user - for boot-time recovery (PushManager.recover()), which runs outside
+   *  any request/user context and only has a Change's siteId to work from. */
+  siteById(id: number): Site | undefined {
+    const row = this.db.prepare('SELECT * FROM sites WHERE id = ?').get(id) as SiteRow | undefined;
+    return row ? toSite(row) : undefined;
+  }
+
+  /** Unscoped by user - slug is globally unique (UNIQUE constraint), and the agent's
+   *  create_change tool only knows its own site's slug, not the owning user. */
+  siteBySlug(slug: string): Site | undefined {
+    const row = this.db.prepare('SELECT * FROM sites WHERE slug = ?').get(slug) as SiteRow | undefined;
+    return row ? toSite(row) : undefined;
+  }
+
   setStatus(
     id: number,
     status: SiteStatus,
@@ -395,7 +409,7 @@ export class Store {
     return this.changeById(insert())!;
   }
 
-  private changeById(id: number): Change | undefined {
+  changeById(id: number): Change | undefined {
     const row = this.db.prepare('SELECT * FROM changes WHERE id = ?').get(id) as ChangeRow | undefined;
     return row ? toChange(row) : undefined;
   }

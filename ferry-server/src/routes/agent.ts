@@ -2,16 +2,18 @@ import type { FastifyInstance } from 'fastify';
 import type { AppDeps } from '../app.js';
 import type { AgentManager } from '../agent/manager.js';
 import type { AgentWireEvent } from '../agent/types.js';
+import type { PushManager } from '../push-manager.js';
 import type { SyncManager } from '../sync.js';
 import { siteContext } from '../agent/context.js';
 
 const MESSAGE_MAX = 4000;
 
-export function agentRoutes(app: FastifyInstance, deps: AppDeps, agents: AgentManager, sync: SyncManager): void {
+export function agentRoutes(app: FastifyInstance, deps: AppDeps, agents: AgentManager, sync: SyncManager, push?: PushManager): void {
   app.post('/api/sites/:id/agent/messages', { preHandler: app.requireUser }, async (request, reply) => {
     const site = deps.store.siteFor(request.user.id, Number((request.params as { id: string }).id));
     if (!site) return reply.code(404).send({ error: 'Site not found.' });
     if (sync.isRunning(site.id)) return reply.code(409).send({ error: 'A sync is running for this site.' });
+    if (push?.isPushing(site.id)) return reply.code(409).send({ error: 'A push is in progress for this site.' });
     if (site.status !== 'ready') return reply.code(409).send({ error: 'Sync the site first.' });
     const text = String((request.body as { text?: unknown } | undefined)?.text ?? '').trim();
     if (text === '' || text.length > MESSAGE_MAX) {

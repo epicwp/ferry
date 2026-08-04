@@ -5,6 +5,8 @@ import { DdevEnv } from '../../ferry-cli/src/env/ddev.js';
 import { link } from '../../ferry-cli/src/link.js';
 import { ferryHome, loadProfile, slugFromUrl, type SiteInfo } from '../../ferry-cli/src/profile.js';
 import { pull, type PullOpts, type PullResult } from '../../ferry-cli/src/pull.js';
+import { push as runPush, rollback as runRollback } from '../../ferry-cli/src/push.js';
+import type { PushRunner } from './push/types.js';
 
 export interface VerifyResult {
   ok: boolean;
@@ -72,6 +74,26 @@ export function realEngine(opts: RealEngineOptions = {}): Engine {
     },
     cloneUrl(slug) {
       return env.url(slug);
+    },
+  };
+}
+
+/** Real PushRunner (Task 13): wraps ferry-cli's push()/rollback() (spec §8) and reads the
+ *  plugin's tx status directly for boot recovery. */
+export function realPushRunner(): PushRunner {
+  return {
+    async push(slug, spec, opts) {
+      return runPush(slug, spec, { headSha: opts.headSha, force: opts.force, onStep: opts.onStep });
+    },
+    async rollback(slug, opts) {
+      return runRollback(slug, { txid: opts.txid, ops: opts.ops });
+    },
+    async txStatus(slug, txid) {
+      const profile = loadProfile(slug);
+      const client = new FerryClient(profile.url, profile.secret);
+      await client.syncClock();
+      const { data } = await client.getJson('/ferry/v1/tx', { txid });
+      return data.status as 'committed' | 'dirty' | 'staged' | 'rolled_back' | 'unknown';
     },
   };
 }

@@ -47,6 +47,15 @@ describe('Store', () => {
     expect(store.siteFor(a.id, site.id)?.slug).toBe('shop-example');
   });
 
+  it('looks up sites unscoped by user, by id and by slug', () => {
+    const a = store.createUser('a@example.com', 'h')!;
+    const site = store.createSite(a.id, 'Shop', 'https://shop.example', 'shop-example')!;
+    expect(store.siteById(site.id)?.slug).toBe('shop-example');
+    expect(store.siteById(-1)).toBeUndefined();
+    expect(store.siteBySlug('shop-example')?.id).toBe(site.id);
+    expect(store.siteBySlug('unknown')).toBeUndefined();
+  });
+
   it('patches status fields', () => {
     const a = store.createUser('a@example.com', 'h')!;
     const site = store.createSite(a.id, 'Shop', 'https://shop.example', 'shop-example')!;
