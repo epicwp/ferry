@@ -99,6 +99,117 @@ describe('PushManager', () => {
     expect(() => manager.start(site, change, {})).toThrow('busy');
   });
 
+  // ---- final-review fix 3: the txid is minted and persisted before the runner is invoked ----
+
+  it('persists a real backupTxid on the change row while pushing, before the runner resolves', () => {
+    const { store, site, change, manager } = setup(scriptedPushRunner());
+    manager.start(site, change, {});
+    const stored = store.changeBySeq(site.id, change.seq)!;
+    expect(stored.status).toBe('pushing');
+    expect(stored.backupTxid).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  it('recover() finds the real txid persisted by start() and takes the txStatus branch', async () => {
+    // Simulate a crash mid-push: start() persists backupTxid synchronously, then the runner
+    // hangs forever (as if the process died before push() ever resolved). A fresh PushManager
+    // (a server restart) must recover using the txid that was actually persisted, not a
+    // hand-set test fixture.
+    const store = new Store(':memory:');
+    const user = store.createUser('a@example.com', 'h')!;
+    const site = store.createSite(user.id, 'S', 'https://klant.nl', 'klant-nl')!;
+    const change = store.createChange(site.id, FIELDS);
+    const crashedManager = new PushManager(store, fakeRunner({ push: () => new Promise(() => {}) }), { specFor });
+    crashedManager.start(site, change, {});
+    const persistedTxid = store.changeBySeq(site.id, change.seq)!.backupTxid!;
+    expect(persistedTxid).toMatch(/^[0-9a-f]{32}$/);
+
+    let txStatusCalledWith: string | undefined;
+    const freshManager = new PushManager(store, fakeRunner({
+      txStatus: async (_slug, txid) => { txStatusCalledWith = txid; return 'committed'; },
+    }), { specFor });
+    await freshManager.recover();
+
+    expect(txStatusCalledWith).toBe(persistedTxid);
+    expect(store.changeBySeq(site.id, change.seq)!.status).toBe('pushed');
+  });
+
+  // ---- final-review fix 2: a throw from runner.push() is caught, not an unhandled rejection ----
+
+  it('a runner that throws before the commit call releases the change back to draft', async () => {
+    const { store, site, change, manager } = setup(fakeRunner({
+      push: async (_s, _spec, opts) => {
+        opts.onStep({ step: 'staging', status: 'start' });
+        opts.onStep({ step: 'staging', status: 'ok' });
+        opts.onStep({ step: 'hashes', status: 'start' });
+        opts.onStep({ step: 'hashes', status: 'ok' });
+        throw new Error('network down');
+      },
+    }));
+    const seen: PushWireEvent[] = [];
+    manager.subscribe(site.id, (e) => seen.push(e));
+    manager.start(site, change, {});
+    await until(() => seen.some((e) => e.type === 'push_done'));
+
+    expect(store.changeBySeq(site.id, change.seq)!.status).toBe('draft');
+    const pushDone = seen.find((e) => e.type === 'push_done')!;
+    expect((pushDone.payload as { status: string; detail: string }).status).toBe('error');
+    expect((pushDone.payload as { status: string; detail: string }).detail).toBe('network down');
+    expect(manager.isPushing(site.id)).toBe(false);
+  });
+
+  it('a runner that throws after the commit step surfaces as conflict, not draft', async () => {
+    const { store, site, change, manager } = setup(fakeRunner({
+      push: async (_s, _spec, opts) => {
+        opts.onStep({ step: 'staging', status: 'ok' });
+        opts.onStep({ step: 'hashes', status: 'ok' });
+        opts.onStep({ step: 'drift', status: 'ok' });
+        throw new Error('lost connection after commit');
+      },
+    }));
+    manager.start(site, change, {});
+    await until(() => store.changeBySeq(site.id, change.seq)!.status !== 'pushing');
+    const stored = store.changeBySeq(site.id, change.seq)!;
+    expect(stored.status).toBe('conflict');
+    expect(stored.conflict).toEqual([{ key: 'push', expected: '', found: 'lost connection after commit' }]);
+  });
+
+  it('does not produce an unhandled rejection when the runner throws', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (err: unknown): void => { unhandled.push(err); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const { manager, site, change } = setup(fakeRunner({ push: async () => { throw new Error('boom'); } }));
+      manager.start(site, change, {});
+      await until(() => !manager.isPushing(site.id));
+      await new Promise((r) => setImmediate(r));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  // ---- final-review fix 4: manual rollback holds the busy flag for its duration ----
+
+  it('manual rollback holds the busy flag - a concurrent push start throws busy', async () => {
+    let releaseRollback: (v: { ok: boolean }) => void = () => undefined;
+    const { store, site, change, manager } = setup(fakeRunner({
+      rollback: () => new Promise((resolve) => { releaseRollback = resolve; }),
+    }));
+    store.setChangeStatus(change.id, 'pushed', { backupTxid: 'txabc', pushedAt: new Date().toISOString() });
+    const pushed = store.changeBySeq(site.id, change.seq)!;
+
+    expect(manager.isPushing(site.id)).toBe(false);
+    const rollbackPromise = manager.rollback(site, pushed);
+    await new Promise((r) => setImmediate(r));
+    expect(manager.isPushing(site.id)).toBe(true);
+    expect(() => manager.start(site, pushed, {})).toThrow('busy');
+
+    releaseRollback({ ok: true });
+    await rollbackPromise;
+    expect(manager.isPushing(site.id)).toBe(false);
+    expect(store.changeBySeq(site.id, change.seq)!.status).toBe('rolled_back');
+  });
+
   it('an apply_error/denied error outcome returns the change to draft, detail on the push_run', async () => {
     const outcome: PushOutcome = { status: 'error', txid: 'tx1', detail: 'apply_error at wp_options.blogname: locked' };
     const { store, site, change, manager } = setup(fakeRunner({ push: async (_s, _spec, opts) => { opts.onStep({ step: 'staging', status: 'start' }); return outcome; } }));

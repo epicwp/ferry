@@ -83,7 +83,7 @@ export function realEngine(opts: RealEngineOptions = {}): Engine {
 export function realPushRunner(): PushRunner {
   return {
     async push(slug, spec, opts) {
-      return runPush(slug, spec, { headSha: opts.headSha, force: opts.force, onStep: opts.onStep });
+      return runPush(slug, spec, { headSha: opts.headSha, force: opts.force, txid: opts.txid, onStep: opts.onStep });
     },
     async rollback(slug, opts) {
       return runRollback(slug, { txid: opts.txid, ops: opts.ops });

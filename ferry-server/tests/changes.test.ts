@@ -192,4 +192,28 @@ describe('ChangeService', () => {
     expect(git(cloneDir, 'status', '--porcelain')).toBe('');
     expect(store.changesFor(site.id)).toEqual([]);
   });
+
+  // ---- final-review fix 8: a smoke check path must be relative, not an absolute URL ----
+
+  it('throws invalid_smoke for a smoke check with an absolute URL path (SSRF guard)', async () => {
+    const input = validInput({ smoke: [{ label: 'evil', path: 'https://evil.example', expectStatus: 200 }] });
+    await expect(service.create(site, input)).rejects.toThrow(/invalid_smoke/);
+    expect(git(cloneDir, 'status', '--porcelain')).toBe('');
+    expect(store.changesFor(site.id)).toEqual([]);
+  });
+
+  // ---- final-review fix 9: an empty-ops journal must not break a second no-op change ----
+
+  it('two consecutive changes with no DB ops both succeed on the same branch', async () => {
+    const first = await service.create(site, validInput({ ops: [] }));
+    expect(first.status).toBe('draft');
+    const headAfterFirst = git(cloneDir, 'rev-parse', 'HEAD');
+
+    const second = await service.create(site, validInput({ ops: [] }));
+
+    expect(second.status).toBe('draft');
+    // journal content unchanged (both empty) - nothing new to commit, HEAD stands still.
+    expect(second.headSha).toBe(headAfterFirst);
+    expect(git(cloneDir, 'status', '--porcelain')).toBe('');
+  });
 });

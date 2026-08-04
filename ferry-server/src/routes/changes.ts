@@ -94,9 +94,12 @@ export function changesRoutes(
     const seq = Number((request.params as { seq: string }).seq);
     const change = deps.store.changeBySeq(site.id, seq);
     if (!change) return reply.code(404).send({ error: 'Change not found.' });
-    // Same guard as the agent message route: a retry opens an agent turn, which must not
-    // start while the site's plugin instance is mid-push.
+    // Same guard trio as the agent message route: a retry opens an agent turn, which must not
+    // start while a sync is running, while the site's plugin instance is mid-push, or before
+    // the site has ever finished a sync (agents.send needs a ready clone to work from).
+    if (sync.isRunning(site.id)) return reply.code(409).send({ error: 'A sync is running for this site.' });
     if (push.isPushing(site.id)) return reply.code(409).send({ error: 'A push is in progress for this site.' });
+    if (site.status !== 'ready') return reply.code(409).send({ error: 'Sync the site first.' });
     if (change.status !== 'conflict') return reply.code(409).send({ error: 'Only a conflicted change can be retried.' });
     if (!agents) return reply.code(409).send({ error: 'Agent chat is not available.' });
     await agents.send(site, conflictMessage(change));

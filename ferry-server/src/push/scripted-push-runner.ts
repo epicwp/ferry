@@ -16,7 +16,7 @@ function wait(ms: number): Promise<void> {
 export function scriptedPushRunner(script: { conflictOn?: PushStep; smokeFails?: boolean } = {}): PushRunner {
   return {
     async push(_slug, _spec, opts) {
-      const txid = randomBytes(16).toString('hex');
+      const txid = opts.txid ?? randomBytes(16).toString('hex');
       for (const step of STEPS) {
         opts.onStep({ step, status: 'start' });
         await wait(5);

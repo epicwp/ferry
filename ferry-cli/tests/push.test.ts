@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FerryClient } from '../src/client.js';
 import { saveProfile } from '../src/profile.js';
-import { defaultBlobFor, invertOp, push } from '../src/push.js';
+import { defaultBlobFor, invertOp, push, runSmoke } from '../src/push.js';
 import { ROLLBACK_FAILED_PREFIX } from '../src/push-types.js';
 import type { ChangeSpec, DbOp, StepEvent } from '../src/push-types.js';
 
@@ -305,6 +305,24 @@ describe('push', () => {
     }
   });
 
+  it('uses a caller-supplied txid instead of minting its own (final-review fix 3)', async () => {
+    const base = await listen((req, res) => {
+      res.statusCode = 200;
+      res.end('home ok');
+    });
+    pair(base);
+    const { client, calls } = fakeClient({
+      stage: [{ staged: ['wp-content/x.php'], rejected: [] }],
+      commit: COMMIT_OK,
+    });
+    const outcome = await push('site', basicSpec(), {
+      headSha: 'deadbeef', client, blobFor, txid: 'caller-supplied-txid',
+    });
+
+    expect(outcome.txid).toBe('caller-supplied-txid');
+    expect(calls.every((c) => c.body.txid === 'caller-supplied-txid')).toBe(true);
+  });
+
   it('commit denied -> error outcome', async () => {
     pair('http://127.0.0.1:1');
     const { client } = fakeClient({
@@ -316,6 +334,27 @@ describe('push', () => {
     if (outcome.status === 'error') {
       expect(outcome.detail).toContain('denied_path');
     }
+  });
+});
+
+describe('runSmoke', () => {
+  it('refuses an absolute URL path without making a request (final-review fix 8)', async () => {
+    const results = await runSmoke('http://127.0.0.1:1', [{ label: 'evil', path: 'https://evil.example', expectStatus: 200 }]);
+    expect(results).toEqual([{ label: 'evil', ok: false, detail: 'invalid path' }]);
+  });
+
+  it('refuses a protocol-relative path without making a request', async () => {
+    const results = await runSmoke('http://127.0.0.1:1', [{ label: 'evil', path: '//evil.example', expectStatus: 200 }]);
+    expect(results).toEqual([{ label: 'evil', ok: false, detail: 'invalid path' }]);
+  });
+
+  it('still runs a normal relative-path check', async () => {
+    const base = await listen((req, res) => {
+      res.statusCode = 200;
+      res.end('home ok');
+    });
+    const results = await runSmoke(base, [{ label: 'home', path: '/', expectStatus: 200 }]);
+    expect(results[0].ok).toBe(true);
   });
 });
 

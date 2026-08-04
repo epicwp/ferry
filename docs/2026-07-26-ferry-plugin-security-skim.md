@@ -101,6 +101,23 @@ Checkpoint A ≈ 30–45 min on the design doc; checkpoint B ≈ 60–90 min on 
 - [ ] Multisite: write endpoints refuse multisite as hard as `/pair` does.
 - [ ] Timeouts: write/commit endpoints follow the resumable-batch pattern (timeouts are
       answers) without a half-committed state ever being reachable.
+- [ ] ⚠️ **Written-acceptance item (final review, Plan 5a): agent subprocess reaches a
+      write-capable secret.** The agent subprocess can read `~/.ferry/sites/<slug>/profile.json`
+      (the site's HMAC secret, `ferry-cli/src/profile.ts`). Before Plan 5a that secret only
+      signed reads; post-5a it also signs `/stage`/`/commit`/`/rollback` - a prompt-injected
+      agent (malicious content in the site it's exploring, or an injected tool result) could use
+      it to sign production writes directly, bypassing the change-card review step entirely.
+      Accepted for v0 until Plan 6's Firecracker isolation sandboxes the subprocess away from
+      that file - **must be a conscious, dated sign-off below, not silently waved through.**
+- [ ] ⚠️ **Written-acceptance item (final review, Plan 5a): raw-SQL option writes bypass the
+      WP object cache.** `DbOps::apply()` writes `option_set`/`option_delete` straight to
+      `wp_options` via `$wpdb->query()`, never through `update_option()`/`delete_option()` - so
+      on a persistent-object-cache host (Redis/Memcached) the cached value is never invalidated.
+      A pushed option change may be invisible to the running site (and to the push's own smoke
+      check, which may then validate a stale cached value as if the write had taken effect)
+      until the cache is flushed by some other means. Decide: call `wp_cache_delete($name,
+      'options')` (and clear the `alloptions` cache key WP's option API also maintains) right
+      after `COMMIT`, or accept this gap for v1 - **must be a conscious, dated sign-off below.**
 
 ## Sign-off
 

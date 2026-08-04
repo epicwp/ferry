@@ -83,7 +83,12 @@ function isValidSmokeCheck(s: unknown): s is SmokeCheck {
   if (typeof s !== 'object' || s === null) return false;
   const r = s as Record<string, unknown>;
   return (
-    typeof r.label === 'string' && typeof r.path === 'string' && typeof r.expectStatus === 'number' &&
+    typeof r.label === 'string' &&
+    // Relative path only - an absolute URL or protocol-relative path handed to
+    // `new URL(path, baseUrl)` (runSmoke, ferry-cli/src/push.ts) would resolve against a HOST
+    // OTHER than the site's own, turning a smoke check into an SSRF vector.
+    typeof r.path === 'string' && r.path.startsWith('/') && !r.path.startsWith('//') &&
+    typeof r.expectStatus === 'number' &&
     (r.expectText === undefined || typeof r.expectText === 'string')
   );
 }
@@ -171,7 +176,14 @@ export class ChangeService {
 
     await writeJournal(dir, input.ops);
     await runGit(dir, ['add', 'journal.ndjson']);
-    await runGit(dir, ['commit', '-q', '-m', `ferry: journal for "${input.title}"`]);
+    // An empty ops list writes zero journal lines - if the previous change on this branch also
+    // had none, the content is byte-identical and `git add` is a no-op: nothing staged, so
+    // `git commit` would exit non-zero (nothing to commit) and runGit would throw. Skip the
+    // commit in that case; headSha below is then just the current HEAD, unchanged.
+    const staged = await runGit(dir, ['status', '--porcelain']);
+    if (staged !== '') {
+      await runGit(dir, ['commit', '-q', '-m', `ferry: journal for "${input.title}"`]);
+    }
     const headSha = await runGit(dir, ['rev-parse', 'HEAD']);
 
     const change = this.store.createChange(site.id, {

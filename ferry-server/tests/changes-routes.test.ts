@@ -201,6 +201,19 @@ describe('changes routes', () => {
     expect(res.statusCode).toBe(409);
   });
 
+  it('refuses retry while a sync is running (409)', async () => {
+    const engine = stubEngine({ pull: () => new Promise(() => {}), verifyClone: async () => ({ ok: true }) });
+    const { app, store } = makeApp({ engine, agent: agentDeps(scriptedRunner()), push: { runner: scriptedPushRunner() } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const change = draftChange(store, site.id);
+    store.setChangeStatus(change.id, 'conflict', { conflict: [{ key: 'wp_options.blogname', expected: 'A', found: 'C' }] });
+
+    await app.inject({ method: 'POST', url: `/api/sites/${site.id}/sync`, headers: { cookie } });
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${change.seq}/retry`, headers: { cookie } });
+    expect(res.statusCode).toBe(409);
+  });
+
   it('refuses retry while a push is in progress for the site (409)', async () => {
     const { app, store } = makeApp({ engine: stubEngine(), agent: agentDeps(scriptedRunner()), push: { runner: scriptedPushRunner() } });
     const cookie = await signup(app);

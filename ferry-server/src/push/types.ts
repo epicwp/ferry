@@ -11,7 +11,7 @@ export interface PushRunner {
   push(
     slug: string,
     spec: ChangeSpec,
-    opts: { headSha: string; force?: boolean; onStep: (e: StepEvent) => void },
+    opts: { headSha: string; force?: boolean; txid?: string; onStep: (e: StepEvent) => void },
   ): Promise<PushOutcome>;
   rollback(slug: string, opts: { txid: string; ops: DbOp[] }): Promise<{ ok: boolean; conflicts?: Conflict[] }>;
   txStatus(slug: string, txid: string): Promise<'committed' | 'dirty' | 'staged' | 'rolled_back' | 'unknown'>;

@@ -25,6 +25,10 @@ export interface PushOpts {
   force?: boolean;
   client?: FerryClient;
   blobFor?: (path: string) => Promise<Buffer>;
+  /** Minted by the caller (ferry-server persists it as backupTxid before the push even starts,
+   *  so boot recovery has something to ask the plugin about) - mints its own when omitted, as
+   *  the bare CLI command does when called standalone. */
+  txid?: string;
 }
 
 const execFileP = promisify(execFile);
@@ -78,7 +82,7 @@ export async function push(slug: string, spec: ChangeSpec, opts: PushOpts): Prom
   }
   const blobFor = opts.blobFor ?? defaultBlobFor(profile.clonePath, opts.headSha);
   const onStep = opts.onStep ?? (() => {});
-  const txid = randomBytes(16).toString('hex');
+  const txid = opts.txid ?? randomBytes(16).toString('hex');
 
   // staging: batch every non-delete file's blob (~2MB base64 per call).
   onStep({ step: 'staging', status: 'start' });
@@ -207,6 +211,13 @@ export function invertOp(op: DbOp): DbOp {
 export async function runSmoke(baseUrl: string, checks: SmokeCheck[]): Promise<{ label: string; ok: boolean; detail: string }[]> {
   const results: { label: string; ok: boolean; detail: string }[] = [];
   for (const check of checks) {
+    if (!check.path.startsWith('/') || check.path.startsWith('//')) {
+      // An absolute URL or protocol-relative path would resolve against a HOST OTHER than
+      // baseUrl once handed to `new URL(path, baseUrl)` - defensive, in case a change card
+      // predating this guard (or a bypassed create_change) ever reaches here.
+      results.push({ label: check.label, ok: false, detail: 'invalid path' });
+      continue;
+    }
     const t0 = Date.now();
     try {
       const res = await request(new URL(check.path, baseUrl));
