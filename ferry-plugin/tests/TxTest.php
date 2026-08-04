@@ -102,4 +102,23 @@ final class TxTest extends TestCase
         $this->assertSame(0, $removed);
         $this->assertDirectoryExists(Staging::backup_dir($this->root, $txid));
     }
+
+    // ---- final-review fix 7: prune also walks .ferry-staging (age alone - no meta there) ----
+
+    public function test_prune_removes_31_day_old_staging_dir_and_keeps_29_day_old(): void
+    {
+        $now = 2000000000;
+        $old = Staging::dir($this->root, str_repeat('1', 32));
+        $recent = Staging::dir($this->root, str_repeat('2', 32));
+        mkdir($old, 0777, true);
+        mkdir($recent, 0777, true);
+        touch($old, $now - 31 * 86400);
+        touch($recent, $now - 29 * 86400);
+
+        $removed = Tx::prune($this->root, $now);
+
+        $this->assertSame(1, $removed);
+        $this->assertDirectoryDoesNotExist($old);
+        $this->assertDirectoryExists($recent);
+    }
 }

@@ -122,6 +122,23 @@ final class RollbackTest extends TestCase
         $this->assertSame('deleted content', file_get_contents($this->root . '/wp-content/themes/t/gone.css'));
     }
 
+    // ---- final-review fix 1: DbOps::validate wired into rollback too - a bad inverse op
+    // refuses the whole rollback, nothing restored ----
+
+    public function test_rollback_refuses_a_row_op_on_a_refused_table(): void
+    {
+        $this->commitModifyAndCreate();
+        $badOps = [['kind' => 'row_update', 'table' => 'wp_posts', 'pkCol' => 'ID', 'pk' => 1, 'old' => ['post_title' => 'a'], 'new' => ['post_title' => 'b']]];
+
+        $result = Commit::rollback($this->root, new FakeWpdb([]), $this->txid, $badOps);
+
+        $this->assertFalse($result['rolled_back']);
+        $this->assertSame([['index' => 0, 'reason' => 'refused_table']], $result['denied']);
+        // nothing restored: the pushed content still stands
+        $this->assertSame('new content', file_get_contents($this->root . '/wp-content/themes/t/a.css'));
+        $this->assertSame('committed', $this->meta()['status']);
+    }
+
     // ---- review fix 1: defense in depth - rollback re-validates meta's paths too ----
 
     public function test_rollback_defense_in_depth_refuses_a_denied_path_found_in_meta(): void

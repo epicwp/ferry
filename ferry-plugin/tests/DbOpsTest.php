@@ -56,6 +56,48 @@ final class DbOpsTest extends TestCase
         $this->assertSame([], $result['refused']);
     }
 
+    // ---- final-review fix 1: lowercase table matching + identifier hygiene ----
+
+    public function test_validate_refuses_mixed_case_content_table(): void
+    {
+        $result = DbOps::validate([
+            ['kind' => 'row_update', 'table' => 'WP_POSTS', 'pkCol' => 'ID', 'pk' => 1, 'old' => ['post_title' => 'a'], 'new' => ['post_title' => 'b']],
+        ], 'wp_');
+
+        $this->assertSame([], $result['ok']);
+        $this->assertSame([['index' => 0, 'reason' => 'refused_table']], $result['refused']);
+    }
+
+    public function test_validate_refuses_bad_table_identifier(): void
+    {
+        $result = DbOps::validate([
+            ['kind' => 'row_update', 'table' => 'wp_settings; DROP TABLE wp_users', 'pkCol' => 'id', 'pk' => 5, 'old' => ['val' => '1'], 'new' => ['val' => '2']],
+        ], 'wp_');
+
+        $this->assertSame([], $result['ok']);
+        $this->assertSame([['index' => 0, 'reason' => 'bad_identifier']], $result['refused']);
+    }
+
+    public function test_validate_refuses_bad_pkcol_identifier(): void
+    {
+        $result = DbOps::validate([
+            ['kind' => 'row_update', 'table' => 'wp_my_plugin_settings', 'pkCol' => 'id`; --', 'pk' => 5, 'old' => ['val' => '1'], 'new' => ['val' => '2']],
+        ], 'wp_');
+
+        $this->assertSame([], $result['ok']);
+        $this->assertSame([['index' => 0, 'reason' => 'bad_identifier']], $result['refused']);
+    }
+
+    public function test_validate_refuses_bad_column_identifier_in_new(): void
+    {
+        $result = DbOps::validate([
+            ['kind' => 'row_update', 'table' => 'wp_my_plugin_settings', 'pkCol' => 'id', 'pk' => 5, 'old' => ['val' => '1'], 'new' => ['val`; --' => '2']],
+        ], 'wp_');
+
+        $this->assertSame([], $result['ok']);
+        $this->assertSame([['index' => 0, 'reason' => 'bad_identifier']], $result['refused']);
+    }
+
     // ---- apply_in_transaction() happy path ----
 
     public function test_happy_path_records_exact_sql_sequence_and_commits(): void

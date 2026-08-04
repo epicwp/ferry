@@ -20,6 +20,14 @@ final class Commit
      */
     public static function run(string $root, $wpdb, string $txid, array $files, array $ops, array $preconditions, bool $force): array
     {
+        // Typed-op validation up front: an unknown kind, a refused content table, or a bad
+        // identifier refuses the WHOLE commit, before any step runs - never let it fall through
+        // apply()'s switch (default case returns null, which reads as "applied").
+        $opsDenied = DbOps::validate($ops, $wpdb->prefix)['refused'];
+        if ($opsDenied !== []) {
+            return ['committed' => false, 'steps' => [], 'conflicts' => [], 'denied' => $opsDenied];
+        }
+
         if (count($files) > self::MAX_FILES) {
             return ['committed' => false, 'steps' => [], 'conflicts' => [], 'error' => 'ferry_too_many_files'];
         }
@@ -173,6 +181,10 @@ final class Commit
             }, $files),
         ]);
 
+        // Blobs are consumed by the swap rename above - the staging dir (manifest, any
+        // leftover blobs) is no longer needed. Backup dir stays: rollback needs it.
+        self::remove_dir($stagingDir);
+
         return ['committed' => true, 'steps' => $steps, 'conflicts' => []];
     }
 
@@ -204,6 +216,11 @@ final class Commit
      */
     public static function rollback(string $root, $wpdb, string $txid, array $ops): array
     {
+        $opsDenied = DbOps::validate($ops, $wpdb->prefix)['refused'];
+        if ($opsDenied !== []) {
+            return ['rolled_back' => false, 'conflicts' => [], 'denied' => $opsDenied];
+        }
+
         $meta = Tx::read($root, $txid);
         if (!is_array($meta)) {
             $meta = [];
@@ -346,5 +363,21 @@ final class Commit
     private static function ms(float $t0): float
     {
         return round((microtime(true) - $t0) * 1000, 3);
+    }
+
+    /** Recursive delete - used to remove a consumed staging dir after a successful commit. */
+    private static function remove_dir(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        foreach (scandir($dir) as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $path = $dir . '/' . $entry;
+            is_dir($path) ? self::remove_dir($path) : @unlink($path);
+        }
+        @rmdir($dir);
     }
 }

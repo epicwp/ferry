@@ -50,10 +50,17 @@ final class Tx
     }
 
     /** Deletes backup dirs older than 30 days - except a non-terminal tx (committing /
-     *  rolling_back), which is never pruned mid-flight no matter how old it looks. */
+     *  rolling_back), which is never pruned mid-flight no matter how old it looks. Also walks
+     *  the staging base (abandoned/never-committed transactions) on the same 30-day retention -
+     *  staging dirs carry no meta.json, so age is the only signal there. */
     public static function prune(string $root, int $now): int
     {
-        $base = dirname(Staging::backup_dir($root, 'x'));
+        return self::prune_base(dirname(Staging::backup_dir($root, 'x')), $now, true)
+            + self::prune_base(dirname(Staging::dir($root, 'x')), $now, false);
+    }
+
+    private static function prune_base(string $base, int $now, bool $checkMeta): int
+    {
         if (!is_dir($base)) {
             return 0;
         }
@@ -67,12 +74,14 @@ final class Tx
             if ($mtime === false || ($now - $mtime) <= self::RETENTION_SECONDS) {
                 continue;
             }
-            $metaPath = $dir . '/meta.json';
-            if (is_file($metaPath)) {
-                $meta = json_decode((string) file_get_contents($metaPath), true);
-                $status = is_array($meta) ? ($meta['status'] ?? null) : null;
-                if (in_array($status, self::NON_TERMINAL_STATUSES, true)) {
-                    continue;
+            if ($checkMeta) {
+                $metaPath = $dir . '/meta.json';
+                if (is_file($metaPath)) {
+                    $meta = json_decode((string) file_get_contents($metaPath), true);
+                    $status = is_array($meta) ? ($meta['status'] ?? null) : null;
+                    if (in_array($status, self::NON_TERMINAL_STATUSES, true)) {
+                        continue;
+                    }
                 }
             }
             self::rrmdir($dir);

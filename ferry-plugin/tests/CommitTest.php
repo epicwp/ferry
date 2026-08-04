@@ -273,6 +273,72 @@ final class CommitTest extends TestCase
         $this->assertSame('conflict', $this->meta()['status']);
     }
 
+    // ---- final-review fix 1: DbOps::validate wired into the write path - a bad op refuses
+    // the whole commit, nothing staged/renamed, before any step runs ----
+
+    public function test_commit_refuses_a_row_op_on_wp_posts_end_to_end(): void
+    {
+        file_put_contents($this->root . '/wp-content/themes/t/a.css', 'old content');
+        Staging::add($this->root, $this->txid, [$this->stagedFile('wp-content/themes/t/a.css', 'new content')]);
+        $files = [
+            ['path' => 'wp-content/themes/t/a.css', 'new_hash' => $this->sha('new content'), 'old_hash' => $this->sha('old content')],
+        ];
+        $ops = [['kind' => 'row_update', 'table' => 'wp_posts', 'pkCol' => 'ID', 'pk' => 1, 'old' => ['post_title' => 'a'], 'new' => ['post_title' => 'b']]];
+        $wpdb = new FakeWpdb([]);
+
+        $result = Commit::run($this->root, $wpdb, $this->txid, $files, $ops, [], false);
+
+        $this->assertFalse($result['committed']);
+        $this->assertSame([], $result['steps']);
+        $this->assertSame([['index' => 0, 'reason' => 'refused_table']], $result['denied']);
+        $this->assertSame('old content', file_get_contents($this->root . '/wp-content/themes/t/a.css')); // nothing swapped
+        $this->assertFileDoesNotExist(Staging::backup_dir($this->root, $this->txid) . '/files/wp-content/themes/t/a.css');
+        $this->assertSame([], $wpdb->queries); // DB step never reached
+        $this->assertFileDoesNotExist(Staging::backup_dir($this->root, $this->txid) . '/meta.json'); // tx meta untouched
+    }
+
+    public function test_commit_refuses_an_unknown_op_kind(): void
+    {
+        $ops = [['kind' => 'schema_migrate']];
+        $wpdb = new FakeWpdb([]);
+
+        $result = Commit::run($this->root, $wpdb, $this->txid, [], $ops, [], false);
+
+        $this->assertFalse($result['committed']);
+        $this->assertSame([['index' => 0, 'reason' => 'unknown_kind']], $result['denied']);
+    }
+
+    public function test_commit_refuses_mixed_case_content_table(): void
+    {
+        $ops = [['kind' => 'row_update', 'table' => 'WP_POSTS', 'pkCol' => 'ID', 'pk' => 1, 'old' => ['post_title' => 'a'], 'new' => ['post_title' => 'b']]];
+        $wpdb = new FakeWpdb([]);
+
+        $result = Commit::run($this->root, $wpdb, $this->txid, [], $ops, [], false);
+
+        $this->assertFalse($result['committed']);
+        $this->assertSame([['index' => 0, 'reason' => 'refused_table']], $result['denied']);
+    }
+
+    // ---- final-review fix 7: staging dir is removed after a successful commit ----
+
+    public function test_successful_commit_removes_the_staging_dir(): void
+    {
+        file_put_contents($this->root . '/wp-content/themes/t/a.css', 'old content');
+        Staging::add($this->root, $this->txid, [$this->stagedFile('wp-content/themes/t/a.css', 'new content')]);
+        $this->assertDirectoryExists(Staging::dir($this->root, $this->txid));
+        $files = [
+            ['path' => 'wp-content/themes/t/a.css', 'new_hash' => $this->sha('new content'), 'old_hash' => $this->sha('old content')],
+        ];
+        $wpdb = new FakeWpdb([]);
+
+        $result = Commit::run($this->root, $wpdb, $this->txid, $files, [], [], false);
+
+        $this->assertTrue($result['committed']);
+        $this->assertDirectoryDoesNotExist(Staging::dir($this->root, $this->txid));
+        // backup dir must survive - rollback needs it
+        $this->assertDirectoryExists(Staging::backup_dir($this->root, $this->txid));
+    }
+
     // ---- review fix 4: commit touches an existing backup dir, surviving a concurrent prune ----
 
     public function test_commit_touches_existing_backup_dir_to_survive_concurrent_prune(): void

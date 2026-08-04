@@ -22,6 +22,10 @@ final class DbOps
     const REFUSED_TABLES = ['posts', 'comments', 'commentmeta', 'users', 'usermeta'];
     const REFUSED_PATTERNS = ['/^woocommerce_/', '/^wc_/', '/^actionscheduler_/'];
 
+    // Identifier hygiene, defense in depth beyond quote_ident's backtick-doubling: a
+    // table/pkCol/column name arriving from the wire must look like a real SQL identifier.
+    const IDENT_RE = '/\A[A-Za-z0-9_]+\z/';
+
     /**
      * @param array $ops list of typed op assoc arrays (see class doc)
      * @return array{ok: array[], refused: array{index:int,reason:string}[]}
@@ -36,22 +40,58 @@ final class DbOps
                 $refused[] = ['index' => $index, 'reason' => 'unknown_kind'];
                 continue;
             }
-            if (in_array($kind, self::ROW_KINDS, true) && self::table_refused(isset($op['table']) ? (string) $op['table'] : '', $prefix)) {
-                $refused[] = ['index' => $index, 'reason' => 'refused_table'];
-                continue;
-            }
             if (!self::shape_ok($kind, $op)) {
                 $refused[] = ['index' => $index, 'reason' => 'bad_shape'];
                 continue;
+            }
+            if (in_array($kind, self::ROW_KINDS, true)) {
+                if (!self::identifiers_ok($op)) {
+                    $refused[] = ['index' => $index, 'reason' => 'bad_identifier'];
+                    continue;
+                }
+                if (self::table_refused((string) $op['table'], $prefix)) {
+                    $refused[] = ['index' => $index, 'reason' => 'refused_table'];
+                    continue;
+                }
             }
             $ok[] = $op;
         }
         return ['ok' => $ok, 'refused' => $refused];
     }
 
+    /** table/pkCol, plus every column name in 'new' (and 'old' for row_update), must match IDENT_RE. */
+    private static function identifiers_ok(array $op): bool
+    {
+        if (!self::valid_ident((string) $op['table']) || !self::valid_ident((string) $op['pkCol'])) {
+            return false;
+        }
+        $cols = [];
+        if (isset($op['new']) && is_array($op['new'])) {
+            $cols = array_merge($cols, array_keys($op['new']));
+        }
+        if ($op['kind'] === 'row_update' && isset($op['old']) && is_array($op['old'])) {
+            $cols = array_merge($cols, array_keys($op['old']));
+        }
+        foreach ($cols as $col) {
+            if (!self::valid_ident((string) $col)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static function valid_ident(string $name): bool
+    {
+        return preg_match(self::IDENT_RE, $name) === 1;
+    }
+
+    /** Case-insensitive: MySQL table names are effectively case-insensitive on the usual
+     *  collations/filesystems, and a bare-case-only rename must not smuggle content past this. */
     private static function table_refused(string $table, string $prefix): bool
     {
-        $bare = (strpos($table, $prefix) === 0) ? substr($table, strlen($prefix)) : $table;
+        $lowerTable = strtolower($table);
+        $lowerPrefix = strtolower($prefix);
+        $bare = (strpos($lowerTable, $lowerPrefix) === 0) ? substr($lowerTable, strlen($lowerPrefix)) : $lowerTable;
         if (in_array($bare, self::REFUSED_TABLES, true)) {
             return true;
         }
