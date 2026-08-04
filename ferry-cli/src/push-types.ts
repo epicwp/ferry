@@ -17,6 +17,12 @@ export interface ChangeSpec { files: ChangeFile[]; ops: DbOp[]; preconditions: P
 export type PushStep = 'staging' | 'hashes' | 'drift' | 'swap' | 'journal' | 'smoke';
 export interface StepEvent { step: PushStep; status: 'start' | 'ok' | 'fail'; detail?: string; durationMs?: number }
 export interface Conflict { key: string; expected: string; found: string }
+/** Detail prefix for the one PushOutcome('error') case where smoke failed AND the automatic
+ *  rollback push() then attempted also failed - nothing here is safe to assume (production may
+ *  be left mid-write). ferry-server's PushManager string-matches this exact prefix to decide
+ *  draft (safe, nothing applied) vs conflict (surface loudly); shared here so the two workspaces
+ *  can't drift apart on the wording. */
+export const ROLLBACK_FAILED_PREFIX = 'smoke failed AND automatic rollback failed';
 export type PushOutcome =
   | { status: 'pushed'; txid: string; smoke: { label: string; ok: boolean; detail: string }[] }
   | { status: 'conflict'; txid: string; conflicts: Conflict[] }

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FerryClient } from '../src/client.js';
 import { saveProfile } from '../src/profile.js';
 import { defaultBlobFor, invertOp, push } from '../src/push.js';
+import { ROLLBACK_FAILED_PREFIX } from '../src/push-types.js';
 import type { ChangeSpec, DbOp, StepEvent } from '../src/push-types.js';
 
 let home: string;
@@ -206,6 +207,9 @@ describe('push', () => {
     if (outcome.status === 'error') {
       expect(outcome.detail).toContain('option:x');
       expect(outcome.detail.toLowerCase()).toContain('rollback');
+      // Pinned to the shared constant (ferry-server's PushManager matches this exact prefix
+      // to decide draft-vs-conflict) - a wording drift here must fail loudly on this side too.
+      expect(outcome.detail.startsWith(ROLLBACK_FAILED_PREFIX)).toBe(true);
     }
   });
 

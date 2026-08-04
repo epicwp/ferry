@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ROLLBACK_FAILED_PREFIX } from '../src/push/types.js';
 import type { ChangeSpec, Conflict, PushOutcome, PushRunner } from '../src/push/types.js';
 import { scriptedPushRunner } from '../src/push/scripted-push-runner.js';
 import type { PushWireEvent } from '../src/push-manager.js';
@@ -109,7 +110,9 @@ describe('PushManager', () => {
   });
 
   it('a failed-auto-rollback error outcome surfaces loudly as conflict, not draft', async () => {
-    const detail = 'smoke failed AND automatic rollback failed: wp_options.blogname';
+    // Built from the constant ferry-cli's push() actually uses (push-types.ts), not a
+    // hand-copied literal - a wording drift between the two workspaces must fail this test.
+    const detail = `${ROLLBACK_FAILED_PREFIX}: wp_options.blogname`;
     const outcome: PushOutcome = { status: 'error', txid: 'tx2', detail };
     const { store, site, change, manager } = setup(fakeRunner({ push: async (_s, _spec, opts) => { opts.onStep({ step: 'smoke', status: 'start' }); return outcome; } }));
     const seen: PushWireEvent[] = [];
@@ -156,6 +159,26 @@ describe('PushManager', () => {
       expect(stored.status).toBe('pushed');
       expect(stored.backupTxid).toBe('tx-interrupted');
       expect(stored.pushedAt).not.toBeNull();
+    });
+
+    it('marks the site as pushing for the duration of recovery, so a fresh push during it is busy', async () => {
+      const { store, site } = setup(scriptedPushRunner());
+      interrupted(store, site); // seeds a change stuck at 'pushing'
+      const otherDraft = store.createChange(site.id, FIELDS);
+      let releaseTxStatus: (status: 'committed') => void = () => undefined;
+      const slowManager = new PushManager(store, fakeRunner({
+        txStatus: () => new Promise((resolve) => { releaseTxStatus = resolve; }),
+      }), { specFor });
+
+      expect(slowManager.isPushing(site.id)).toBe(false);
+      const recovering = slowManager.recover();
+      await new Promise((r) => setImmediate(r)); // let recover() reach the pending txStatus call
+      expect(slowManager.isPushing(site.id)).toBe(true);
+      expect(() => slowManager.start(site, otherDraft, {})).toThrow('busy');
+
+      releaseTxStatus('committed');
+      await recovering;
+      expect(slowManager.isPushing(site.id)).toBe(false);
     });
 
     it('dirty -> rollback called, ok -> rolled_back', async () => {

@@ -1,3 +1,4 @@
+import { ROLLBACK_FAILED_PREFIX } from './push/types.js';
 import type { ChangeSpec, PushOutcome, PushRunner, StepEvent } from './push/types.js';
 import type { Change, PushRun, Site, Store } from './store.js';
 
@@ -12,11 +13,6 @@ type Listener = (e: PushWireEvent) => void;
 export interface PushManagerOpts {
   specFor(change: Change): ChangeSpec;
 }
-
-/** Detail prefix push.ts (ferry-cli) uses when smoke failed AND the automatic rollback it then
- *  attempts also failed - the one PushOutcome('error') case that must NOT read as a silent
- *  return-to-draft (nothing was applied there; here production may be left mid-write). */
-const ROLLBACK_FAILED_PREFIX = 'smoke failed AND automatic rollback failed';
 
 /**
  * Per-site push state machine (design §Write-back). Mirrors SyncManager's shape (active state
@@ -139,7 +135,15 @@ export class PushManager {
       if (!change) continue;
       const site = this.store.siteById(change.siteId);
       if (!site) continue;
-      await this.recoverOne(site, change, row.backupTxid);
+      // Boot recovery is itself an in-flight write-back operation on this site (it may call
+      // runner.rollback()) - hold the busy flag for its duration so a fresh push started before
+      // recovery finishes can't race it (isPushing would otherwise read false the whole time).
+      this.pushing.add(site.id);
+      try {
+        await this.recoverOne(site, change, row.backupTxid);
+      } finally {
+        this.pushing.delete(site.id);
+      }
     }
   }
 

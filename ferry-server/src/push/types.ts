@@ -1,6 +1,9 @@
 import type { ChangeSpec, Conflict, DbOp, PushOutcome, StepEvent } from '../../../ferry-cli/src/push-types.js';
 
 export type { ChangeSpec, Conflict, DbOp, PushOutcome, PushStep, StepEvent } from '../../../ferry-cli/src/push-types.js';
+// Value (not type-only) re-export: PushManager string-matches this exact prefix, so it must
+// come from the same source ferry-cli's push() builds it from, not a hand-copied literal.
+export { ROLLBACK_FAILED_PREFIX } from '../../../ferry-cli/src/push-types.js';
 
 /** Server-side seam over ferry-cli's push()/rollback() (spec §8) — lets PushManager drive a
  *  real production write-back or a scripted fake without knowing which. */

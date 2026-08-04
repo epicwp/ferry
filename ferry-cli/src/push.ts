@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { request } from 'undici';
 import { FerryClient } from './client.js';
 import { loadProfile } from './profile.js';
+import { ROLLBACK_FAILED_PREFIX } from './push-types.js';
 import type { ChangeFile, ChangeSpec, Conflict, DbOp, PushOutcome, PushStep, SmokeCheck, StepEvent } from './push-types.js';
 
 /** ~2MB of base64 payload per /stage call (spec §8). */
@@ -151,7 +152,7 @@ export async function push(slug: string, spec: ChangeSpec, opts: PushOpts): Prom
     const rb = await rollback(slug, { txid, ops: spec.ops, client });
     if (!rb.ok) {
       const conflictKeys = (rb.conflicts ?? []).map((c) => c.key).join(', ');
-      return { status: 'error', txid, detail: `smoke failed AND automatic rollback failed: ${conflictKeys}` };
+      return { status: 'error', txid, detail: `${ROLLBACK_FAILED_PREFIX}: ${conflictKeys}` };
     }
     return { status: 'rolled_back', txid, reason: 'smoke_failed', smoke };
   }

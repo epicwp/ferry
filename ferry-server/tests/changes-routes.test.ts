@@ -160,6 +160,20 @@ describe('changes routes', () => {
     expect(second.statusCode).toBe(409);
   });
 
+  it('refuses to roll back while a (different) push is in progress for the site (409)', async () => {
+    const { app, store } = makeApp({ engine: stubEngine(), push: { runner: scriptedPushRunner() } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const pushed = draftChange(store, site.id);
+    store.setChangeStatus(pushed.id, 'pushed', { backupTxid: 'txabc', pushedAt: new Date().toISOString() });
+    const pushing = draftChange(store, site.id);
+
+    await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${pushing.seq}/push`, headers: { cookie } });
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${pushed.seq}/rollback`, headers: { cookie } });
+    expect(res.statusCode).toBe(409);
+    expect(store.changeBySeq(site.id, pushed.seq)!.status).toBe('pushed'); // untouched
+  });
+
   it('retry sends a message containing the conflicting key, and leaves the change conflicted', async () => {
     const { app, store } = makeApp({ engine: stubEngine(), agent: agentDeps(scriptedRunner()), push: { runner: scriptedPushRunner() } });
     const cookie = await signup(app);
@@ -184,6 +198,19 @@ describe('changes routes', () => {
     const site = await readySite(app, cookie, store);
     const change = draftChange(store, site.id);
     const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${change.seq}/retry`, headers: { cookie } });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('refuses retry while a push is in progress for the site (409)', async () => {
+    const { app, store } = makeApp({ engine: stubEngine(), agent: agentDeps(scriptedRunner()), push: { runner: scriptedPushRunner() } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const conflicted = draftChange(store, site.id);
+    store.setChangeStatus(conflicted.id, 'conflict', { conflict: [{ key: 'wp_options.blogname', expected: 'A', found: 'C' }] });
+    const pushing = draftChange(store, site.id);
+
+    await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${pushing.seq}/push`, headers: { cookie } });
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${conflicted.seq}/retry`, headers: { cookie } });
     expect(res.statusCode).toBe(409);
   });
 

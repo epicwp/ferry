@@ -67,6 +67,9 @@ export function changesRoutes(
     const seq = Number((request.params as { seq: string }).seq);
     const change = deps.store.changeBySeq(site.id, seq);
     if (!change) return reply.code(404).send({ error: 'Change not found.' });
+    // A rollback is itself a write-back call to the plugin - refuse it while another push (or
+    // boot recovery) is already talking to the same site's plugin instance.
+    if (push.isPushing(site.id)) return reply.code(409).send({ error: 'A push is already running for this site.' });
     // A second rollback of an already-rolled-back change wedges the plugin tx to dirty
     // (known bookkeeping gap) - refuse anything but exactly 'pushed'.
     if (change.status !== 'pushed') return reply.code(409).send({ error: 'Only a pushed change can be rolled back.' });
@@ -91,6 +94,9 @@ export function changesRoutes(
     const seq = Number((request.params as { seq: string }).seq);
     const change = deps.store.changeBySeq(site.id, seq);
     if (!change) return reply.code(404).send({ error: 'Change not found.' });
+    // Same guard as the agent message route: a retry opens an agent turn, which must not
+    // start while the site's plugin instance is mid-push.
+    if (push.isPushing(site.id)) return reply.code(409).send({ error: 'A push is in progress for this site.' });
     if (change.status !== 'conflict') return reply.code(409).send({ error: 'Only a conflicted change can be retried.' });
     if (!agents) return reply.code(409).send({ error: 'Agent chat is not available.' });
     await agents.send(site, conflictMessage(change));
