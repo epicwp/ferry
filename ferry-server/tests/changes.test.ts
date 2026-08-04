@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { DbOp, Precondition, SmokeCheck } from '../../ferry-cli/src/push-types.js';
-import type { CreateChangeInput } from '../src/changes.js';
+import type { ChangeServiceDeps, CreateChangeInput } from '../src/changes.js';
 import { ChangeService } from '../src/changes.js';
 import type { Site } from '../src/store.js';
 import { Store } from '../src/store.js';
@@ -52,16 +52,22 @@ describe('ChangeService', () => {
   let events: { siteId: number; type: string; payload: Record<string, unknown> }[];
   let service: ChangeService;
 
+  function serviceWith(overrides: Partial<ChangeServiceDeps>): ChangeService {
+    return new ChangeService(store, {
+      cloneDir: () => cloneDir,
+      appendSystemEvent: (siteId, type, payload) => { events.push({ siteId, type, payload }); },
+      prefixFor: () => 'wp_',
+      ...overrides,
+    });
+  }
+
   beforeEach(() => {
     cloneDir = setupRepo();
     store = new Store(':memory:');
     const user = store.createUser('a@example.com', 'h')!;
     site = store.createSite(user.id, 'Klant', 'https://klant.nl', 'klant-nl')!;
     events = [];
-    service = new ChangeService(store, {
-      cloneDir: () => cloneDir,
-      appendSystemEvent: (siteId, type, payload) => { events.push({ siteId, type, payload }); },
-    });
+    service = serviceWith({});
   });
 
   afterEach(() => {
@@ -141,5 +147,49 @@ describe('ChangeService', () => {
     expect(git(cloneDir, 'status', '--porcelain')).toBe('');
     expect(store.changesFor(site.id)).toEqual([]);
     expect(events).toEqual([]);
+  });
+
+  it('throws refused_op case-insensitively (mixed-case table name, default wp_ prefix)', async () => {
+    const input = validInput({
+      ops: [{ kind: 'row_update', table: 'WP_POSTS', pkCol: 'ID', pk: 1, old: {}, new: {} }],
+    });
+    await expect(service.create(site, input)).rejects.toThrow(/refused_op/);
+  });
+
+  it('refuses a row op on the actual site prefix, not just the wp_ default', async () => {
+    const shopService = serviceWith({ prefixFor: () => 'shop_' });
+    const input = validInput({
+      ops: [{ kind: 'row_update', table: 'shop_users', pkCol: 'ID', pk: 1, old: {}, new: {} }],
+    });
+    await expect(shopService.create(site, input)).rejects.toThrow(/refused_op/);
+  });
+
+  it('does not refuse a wp_-prefixed table when the real prefix is shop_ (not stripped, no false match)', async () => {
+    const shopService = serviceWith({ prefixFor: () => 'shop_' });
+    // Under a shop_ install this table is some unrelated custom table named wp_something,
+    // not WordPress's own wp_posts - it must not be silently stripped and misclassified.
+    const input = validInput({
+      ops: [{ kind: 'row_update', table: 'wp_widgets', pkCol: 'ID', pk: 1, old: {}, new: {} }],
+    });
+    await expect(shopService.create(site, input)).resolves.toMatchObject({ status: 'draft' });
+  });
+
+  it('throws invalid_op for an unrecognized op kind, before touching the clone', async () => {
+    const input = validInput({
+      ops: [{ kind: 'row_updatee', table: 'wp_options', pkCol: 'ID', pk: 1, old: {}, new: {} } as unknown as DbOp],
+    });
+    await expect(service.create(site, input)).rejects.toThrow(/invalid_op/);
+    expect(git(cloneDir, 'status', '--porcelain')).toBe('');
+    expect(store.changesFor(site.id)).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it('throws invalid_op (not a raw TypeError) for a row op missing table', async () => {
+    const input = validInput({
+      ops: [{ kind: 'row_update', pkCol: 'ID', pk: 1, old: {}, new: {} } as unknown as DbOp],
+    });
+    await expect(service.create(site, input)).rejects.toThrow(/invalid_op/);
+    expect(git(cloneDir, 'status', '--porcelain')).toBe('');
+    expect(store.changesFor(site.id)).toEqual([]);
   });
 });

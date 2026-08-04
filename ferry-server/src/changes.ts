@@ -11,6 +11,9 @@ const execFileP = promisify(execFile);
 export interface ChangeServiceDeps {
   cloneDir: (slug: string) => string;
   appendSystemEvent: (siteId: number, type: string, payload: Record<string, unknown>) => void;
+  /** The site's actual table prefix (real wiring: `loadProfile(slug).info?.prefix ?? 'wp_'`,
+   *  mirroring journal.ts) - a hardening install may run `shop_` instead of `wp_`. */
+  prefixFor: (slug: string) => string;
 }
 
 export interface CreateChangeInput {
@@ -27,16 +30,33 @@ export interface CreateChangeInput {
 const REFUSED_TABLES = new Set(['posts', 'comments', 'commentmeta', 'users', 'usermeta']);
 const REFUSED_PREFIXES = ['woocommerce_', 'wc_', 'actionscheduler_'];
 
-function isRefusedTable(table: string): boolean {
-  const stripped = table.startsWith('wp_') ? table.slice(3) : table;
+/** `prefix` is the site's actual table prefix (not always `wp_` - hardening installs often
+ *  rename it), and both sides are lowercased before comparing since MySQL table names are
+ *  case-insensitive on the usual case-insensitive collations/filesystems. */
+function isRefusedTable(table: string, prefix: string): boolean {
+  const lowerTable = table.toLowerCase();
+  const lowerPrefix = prefix.toLowerCase();
+  const stripped = lowerTable.startsWith(lowerPrefix) ? lowerTable.slice(lowerPrefix.length) : lowerTable;
   return REFUSED_TABLES.has(stripped) || REFUSED_PREFIXES.some((p) => stripped.startsWith(p));
 }
 
-/** Only row_* ops name a table; option/postmeta ops never touch content tables. */
-function validateOps(ops: DbOp[]): void {
+const VALID_OP_KINDS = new Set([
+  'option_set', 'option_delete', 'postmeta_set', 'postmeta_delete',
+  'row_update', 'row_insert', 'row_delete',
+]);
+
+/** Ops arrive from the agent's tool call as untyped JSON cast to `DbOp` - never trust the
+ *  compile-time type. Checks the runtime shape the same way isValidPrecondition/
+ *  isValidSmokeCheck do before deciding whether a row op needs the refused-table check. */
+function validateOps(ops: DbOp[], prefix: string): void {
   for (const op of ops) {
-    if (op.kind === 'row_update' || op.kind === 'row_insert' || op.kind === 'row_delete') {
-      if (isRefusedTable(op.table)) throw new Error(`refused_op: ${op.table}`);
+    const r = op as unknown as Record<string, unknown>;
+    const kind = r.kind;
+    if (typeof kind !== 'string' || !VALID_OP_KINDS.has(kind)) throw new Error(`invalid_op: ${String(kind)}`);
+    if (kind === 'row_update' || kind === 'row_insert' || kind === 'row_delete') {
+      const table = r.table;
+      if (typeof table !== 'string' || table === '') throw new Error(`invalid_op: ${kind}`);
+      if (isRefusedTable(table, prefix)) throw new Error(`refused_op: ${table}`);
     }
   }
 }
@@ -126,7 +146,7 @@ export class ChangeService {
 
   async create(site: Site, input: CreateChangeInput): Promise<Change> {
     // Validate everything first - no journal commit on a change that then fails validation.
-    validateOps(input.ops);
+    validateOps(input.ops, this.deps.prefixFor(site.slug));
     for (const p of input.preconditions) {
       if (!isValidPrecondition(p)) throw new Error('invalid_precondition');
     }
