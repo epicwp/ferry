@@ -202,6 +202,28 @@ describe('ChangeService', () => {
     expect(store.changesFor(site.id)).toEqual([]);
   });
 
+  // ---- SSRF bypass: a backslash is a path separator for `new URL` on special schemes, so a
+  // path starting with '/' and not '//' can still resolve to a different host at push time. ----
+
+  it('throws invalid_smoke for a backslash-disguised absolute host (single backslash)', async () => {
+    const input = validInput({ smoke: [{ label: 'evil', path: '/\\evil.example/x', expectStatus: 200 }] });
+    await expect(service.create(site, input)).rejects.toThrow(/invalid_smoke/);
+    expect(git(cloneDir, 'status', '--porcelain')).toBe('');
+    expect(store.changesFor(site.id)).toEqual([]);
+  });
+
+  it('throws invalid_smoke for a backslash-disguised absolute host (double backslash)', async () => {
+    const input = validInput({ smoke: [{ label: 'evil', path: '/\\\\127.0.0.1/x', expectStatus: 200 }] });
+    await expect(service.create(site, input)).rejects.toThrow(/invalid_smoke/);
+    expect(git(cloneDir, 'status', '--porcelain')).toBe('');
+    expect(store.changesFor(site.id)).toEqual([]);
+  });
+
+  it('still accepts a normal relative smoke path', async () => {
+    const input = validInput({ smoke: [{ label: 'checkout', path: '/checkout', expectStatus: 200 }] });
+    await expect(service.create(site, input)).resolves.toMatchObject({ status: 'draft' });
+  });
+
   // ---- final-review fix 9: an empty-ops journal must not break a second no-op change ----
 
   it('two consecutive changes with no DB ops both succeed on the same branch', async () => {

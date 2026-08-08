@@ -79,15 +79,30 @@ function isValidPrecondition(p: unknown): p is Precondition {
   }
 }
 
+// Resolved against a placeholder origin below to check `path` doesn't escape it - a bare
+// prefix check (startsWith('/') && !startsWith('//')) isn't enough, since `new URL` treats a
+// backslash as a path separator for special schemes: `/\evil.example/x` passes that check yet
+// still resolves to `https://evil.example/x` (SSRF).
+const SMOKE_CHECK_PLACEHOLDER = 'https://placeholder.invalid';
+
+function isValidSmokePath(path: string): boolean {
+  if (!path.startsWith('/') || path.startsWith('//')) return false;
+  try {
+    return new URL(path, SMOKE_CHECK_PLACEHOLDER).origin === new URL(SMOKE_CHECK_PLACEHOLDER).origin;
+  } catch {
+    return false;
+  }
+}
+
 function isValidSmokeCheck(s: unknown): s is SmokeCheck {
   if (typeof s !== 'object' || s === null) return false;
   const r = s as Record<string, unknown>;
   return (
     typeof r.label === 'string' &&
-    // Relative path only - an absolute URL or protocol-relative path handed to
-    // `new URL(path, baseUrl)` (runSmoke, ferry-cli/src/push.ts) would resolve against a HOST
-    // OTHER than the site's own, turning a smoke check into an SSRF vector.
-    typeof r.path === 'string' && r.path.startsWith('/') && !r.path.startsWith('//') &&
+    // Relative path only - an absolute URL, protocol-relative, or backslash-disguised path
+    // handed to `new URL(path, baseUrl)` (runSmoke, ferry-cli/src/push.ts) would resolve
+    // against a HOST OTHER than the site's own, turning a smoke check into an SSRF vector.
+    typeof r.path === 'string' && isValidSmokePath(r.path) &&
     typeof r.expectStatus === 'number' &&
     (r.expectText === undefined || typeof r.expectText === 'string')
   );

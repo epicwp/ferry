@@ -109,7 +109,9 @@ describe('push', () => {
     expect(events.map((e) => `${e.step}:${e.status}`)).toEqual([
       'staging:start', 'staging:ok',
       'hashes:start', 'hashes:ok',
-      'drift:start', 'drift:ok',
+      'drift:start', // emitted before the /commit POST (final-fix-wave 2) - bare, no matching
+      // status yet, so a throw during that call leaves 'drift' (not 'hashes') as the last step.
+      'drift:start', 'drift:ok', // then the plugin's own drift result is re-emitted as usual.
       'swap:start', 'swap:ok',
       'journal:start', 'journal:ok',
       'smoke:start', 'smoke:ok',
@@ -161,7 +163,7 @@ describe('push', () => {
     if (outcome.status === 'conflict') {
       expect(outcome.conflicts).toEqual([{ key: 'wp-content/x.php', expected: 'oldhash', found: 'other-hash' }]);
     }
-    expect(events.map((e) => e.step)).toEqual(['staging', 'staging', 'hashes', 'hashes']);
+    expect(events.map((e) => e.step)).toEqual(['staging', 'staging', 'hashes', 'hashes', 'drift']);
     expect(calls.some((c) => c.route === '/ferry/v1/rollback')).toBe(false);
   });
 
@@ -355,6 +357,51 @@ describe('runSmoke', () => {
     });
     const results = await runSmoke(base, [{ label: 'home', path: '/', expectStatus: 200 }]);
     expect(results[0].ok).toBe(true);
+  });
+
+  it('still runs a normal /checkout path', async () => {
+    const base = await listen((req, res) => {
+      res.statusCode = 200;
+      res.end('checkout ok');
+    });
+    const results = await runSmoke(base, [{ label: 'checkout', path: '/checkout', expectStatus: 200 }]);
+    expect(results[0].ok).toBe(true);
+  });
+
+  // ---- SSRF bypass: `new URL` treats a backslash as a path separator for special schemes, so
+  // `/\evil-host/x` still passes `startsWith('/') && !startsWith('//')` yet resolves to a HOST
+  // OTHER than baseUrl. A local "evil" server that must never see a hit proves no fetch happens. ----
+
+  it('refuses a backslash-disguised host (single backslash) without ever hitting it', async () => {
+    let evilHit = false;
+    const evilBase = await listen((req, res) => {
+      evilHit = true;
+      res.statusCode = 200;
+      res.end('should never be reached');
+    });
+    const evilPort = new URL(evilBase).port;
+    const safeBase = 'http://127.0.0.1:1'; // unreachable on purpose - must never be contacted either
+    const results = await runSmoke(safeBase, [
+      { label: 'evil', path: `/\\127.0.0.1:${evilPort}/x`, expectStatus: 200 },
+    ]);
+    expect(results).toEqual([{ label: 'evil', ok: false, detail: 'invalid path' }]);
+    expect(evilHit).toBe(false);
+  });
+
+  it('refuses a backslash-disguised host (double backslash) without ever hitting it', async () => {
+    let evilHit = false;
+    const evilBase = await listen((req, res) => {
+      evilHit = true;
+      res.statusCode = 200;
+      res.end('should never be reached');
+    });
+    const evilPort = new URL(evilBase).port;
+    const safeBase = 'http://127.0.0.1:1';
+    const results = await runSmoke(safeBase, [
+      { label: 'evil', path: `/\\\\127.0.0.1:${evilPort}/x`, expectStatus: 200 },
+    ]);
+    expect(results).toEqual([{ label: 'evil', ok: false, detail: 'invalid path' }]);
+    expect(evilHit).toBe(false);
   });
 });
 

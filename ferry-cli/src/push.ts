@@ -116,7 +116,12 @@ export async function push(slug: string, spec: ChangeSpec, opts: PushOpts): Prom
   }
   onStep({ step: 'hashes', status: 'ok' });
 
-  // one /commit call: hashes/drift/backup/swap/journal all run server-side.
+  // one /commit call: hashes/drift/backup/swap/journal all run server-side. Emitted before the
+  // call (not just re-emitted from the response below): if this throws, the last StepEvent the
+  // caller saw is 'drift', not 'hashes' - PushManager's PRE_COMMIT_STEPS excludes 'drift', so a
+  // lost response is classified 'conflict' rather than silently reverting to 'draft' when the
+  // write may already have landed server-side.
+  onStep({ step: 'drift', status: 'start' });
   const commitRes = await client.postJson('/ferry/v1/commit', {
     txid,
     files: spec.files.map((f: ChangeFile) => ({ path: f.path, new_hash: f.newHash, old_hash: f.oldHash })),
@@ -214,13 +219,22 @@ export async function runSmoke(baseUrl: string, checks: SmokeCheck[]): Promise<{
     if (!check.path.startsWith('/') || check.path.startsWith('//')) {
       // An absolute URL or protocol-relative path would resolve against a HOST OTHER than
       // baseUrl once handed to `new URL(path, baseUrl)` - defensive, in case a change card
-      // predating this guard (or a bypassed create_change) ever reaches here.
+      // predating this guard (or a bypassed create_change) ever reaches here. Cheap first gate;
+      // the origin assertion below is what actually closes the SSRF hole.
+      results.push({ label: check.label, ok: false, detail: 'invalid path' });
+      continue;
+    }
+    const url = new URL(check.path, baseUrl);
+    if (url.origin !== new URL(baseUrl).origin) {
+      // `new URL` treats a backslash as a path separator for special schemes, so e.g.
+      // `/\evil.example/x` passes the prefix gate above yet still resolves to a HOST OTHER
+      // than baseUrl. Fail closed on the resolved origin instead of adding more prefix rules.
       results.push({ label: check.label, ok: false, detail: 'invalid path' });
       continue;
     }
     const t0 = Date.now();
     try {
-      const res = await request(new URL(check.path, baseUrl));
+      const res = await request(url);
       const body = await res.body.text();
       const ms = Date.now() - t0;
       const ok = res.statusCode === check.expectStatus && (!check.expectText || body.includes(check.expectText));

@@ -173,6 +173,24 @@ describe('PushManager', () => {
     expect(stored.conflict).toEqual([{ key: 'push', expected: '', found: 'lost connection after commit' }]);
   });
 
+  // ---- final-fix-wave 2: a throw during /commit (lost response) must not read back as draft ----
+
+  it('a runner that throws right after drift:start (lost /commit response) surfaces as conflict, not draft', async () => {
+    const { store, site, change, manager } = setup(fakeRunner({
+      push: async (_s, _spec, opts) => {
+        opts.onStep({ step: 'staging', status: 'ok' });
+        opts.onStep({ step: 'hashes', status: 'ok' });
+        opts.onStep({ step: 'drift', status: 'start' });
+        throw new Error('lost /commit response');
+      },
+    }));
+    manager.start(site, change, {});
+    await until(() => store.changeBySeq(site.id, change.seq)!.status !== 'pushing');
+    const stored = store.changeBySeq(site.id, change.seq)!;
+    expect(stored.status).toBe('conflict');
+    expect(stored.conflict).toEqual([{ key: 'push', expected: '', found: 'lost /commit response' }]);
+  });
+
   it('does not produce an unhandled rejection when the runner throws', async () => {
     const unhandled: unknown[] = [];
     const onUnhandled = (err: unknown): void => { unhandled.push(err); };
