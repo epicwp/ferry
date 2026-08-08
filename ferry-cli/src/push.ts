@@ -224,11 +224,20 @@ export async function runSmoke(baseUrl: string, checks: SmokeCheck[]): Promise<{
       results.push({ label: check.label, ok: false, detail: 'invalid path' });
       continue;
     }
-    const url = new URL(check.path, baseUrl);
-    if (url.origin !== new URL(baseUrl).origin) {
-      // `new URL` treats a backslash as a path separator for special schemes, so e.g.
-      // `/\evil.example/x` passes the prefix gate above yet still resolves to a HOST OTHER
-      // than baseUrl. Fail closed on the resolved origin instead of adding more prefix rules.
+    let url: URL;
+    try {
+      url = new URL(check.path, baseUrl);
+      if (url.origin !== new URL(baseUrl).origin) {
+        // `new URL` treats a backslash as a path separator for special schemes, so e.g.
+        // `/\evil.example/x` passes the prefix gate above yet still resolves to a HOST OTHER
+        // than baseUrl. Fail closed on the resolved origin instead of adding more prefix rules.
+        results.push({ label: check.label, ok: false, detail: 'invalid path' });
+        continue;
+      }
+    } catch {
+      // A path that passes the prefix gate can still fail to parse (e.g. `/\/` normalizes to
+      // an empty hostname) - `new URL` throws rather than resolving. Fail this check closed
+      // instead of letting the throw escape runSmoke uncaught.
       results.push({ label: check.label, ok: false, detail: 'invalid path' });
       continue;
     }

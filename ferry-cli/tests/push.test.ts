@@ -403,6 +403,20 @@ describe('runSmoke', () => {
     expect(results).toEqual([{ label: 'evil', ok: false, detail: 'invalid path' }]);
     expect(evilHit).toBe(false);
   });
+
+  it('fails a path that passes the prefix gate but does not parse, without throwing or fetching', async () => {
+    let hit = false;
+    const base = await listen((req, res) => {
+      hit = true;
+      res.statusCode = 200;
+      res.end('should never be reached');
+    });
+    // backslash-then-slash yields an empty hostname once `\` is normalized to `/` - `new URL`
+    // throws Invalid URL for this input rather than resolving to a different origin.
+    const results = await runSmoke(base, [{ label: 'bad', path: '/\\/', expectStatus: 200 }]);
+    expect(results).toEqual([{ label: 'bad', ok: false, detail: 'invalid path' }]);
+    expect(hit).toBe(false);
+  });
 });
 
 describe('invertOp', () => {
