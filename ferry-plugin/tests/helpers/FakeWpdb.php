@@ -15,6 +15,11 @@ final class FakeWpdb
     /** Mirrors real wpdb's public $prefix - Commit reads $wpdb->prefix directly. */
     public $prefix = 'wp_';
 
+    /** Mirrors real wpdb::$suppress_errors; insert() snapshots it per call. */
+    public $suppress_errors = false;
+    /** @var bool[] suppress flag observed at each insert() call */
+    public $insert_suppress = [];
+
     /** @var int|null 0-indexed call count into query(); when set, that specific call
      *  returns false instead of the default 0, simulating a failed statement (real
      *  wpdb::query() returns false on error - unique violation, NOT NULL, etc). */
@@ -27,9 +32,18 @@ final class FakeWpdb
         $this->script = $script;
     }
 
+    /** Mirrors real wpdb::suppress_errors(): sets the flag, returns the previous value. */
+    public function suppress_errors($suppress = true)
+    {
+        $prev = $this->suppress_errors;
+        $this->suppress_errors = (bool) $suppress;
+        return $prev;
+    }
+
     /** Mimics wpdb::insert(): false on duplicate key, like the real UNIQUE index on option_name. */
     public function insert($table, array $data)
     {
+        $this->insert_suppress[] = $this->suppress_errors;
         $name = $data['option_name'];
         if (array_key_exists($name, $this->options)) {
             return false;
