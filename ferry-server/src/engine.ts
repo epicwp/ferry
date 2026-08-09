@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { request } from 'undici';
+import { Agent, interceptors, request } from 'undici';
 import { FerryClient } from '../../ferry-cli/src/client.js';
 import { DdevEnv } from '../../ferry-cli/src/env/ddev.js';
 import { link } from '../../ferry-cli/src/link.js';
@@ -30,9 +30,16 @@ export interface RealEngineOptions {
   verifyFetch?: VerifyFetch;
 }
 
+// Private dispatcher pinned to this module, like wporg.ts's redirectAgent: the
+// process-global dispatcher (Symbol.for registry) is shared with every undici copy in
+// the process — node's bundled v7 can claim it via an early fetch() and rejects the v6
+// maxRedirections request option outright, failing every verifyClone attempt.
+const verifyAgent = new Agent().compose(interceptors.redirect({ maxRedirections: 3 }));
+const defaultVerifyFetch: VerifyFetch = (url) => request(url, { dispatcher: verifyAgent });
+
 export function realEngine(opts: RealEngineOptions = {}): Engine {
   const env = new DdevEnv();
-  const verifyFetch = opts.verifyFetch ?? request;
+  const verifyFetch = opts.verifyFetch ?? defaultVerifyFetch;
   return {
     async link(url, code) {
       // clone dirs live under the server's FERRY_HOME, not the operator's homedir

@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { realEngine, type VerifyFetch } from '../src/engine.js';
 
@@ -56,4 +58,34 @@ describe('realEngine().verifyClone', () => {
     expect(result.ok).toBe(false);
     expect(result.detail).toContain('502');
   });
+
+  it('default fetch survives a global-dispatcher takeover by another undici copy', async () => {
+    // The process-global dispatcher lives under Symbol.for('undici.globalDispatcher.1'),
+    // shared by every undici copy in the process — node's bundled v7 can claim it via an
+    // early fetch(), and v7 rejects the v6 maxRedirections request option outright
+    // (seen live: Plan 5a acceptance run, verifyClone failing for 30s straight).
+    const kDispatcher = Symbol.for('undici.globalDispatcher.1');
+    const g = globalThis as Record<PropertyKey, unknown>;
+    const previous = g[kDispatcher];
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<html>clone up</html>');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    g[kDispatcher] = {
+      dispatch(_opts: unknown, handler: { onError(err: Error): void }) {
+        handler.onError(new Error('maxRedirections is not supported, use the redirect interceptor'));
+        return false;
+      },
+    };
+    try {
+      const engine = realEngine();
+      const result = await engine.verifyClone(`http://127.0.0.1:${port}/`);
+      expect(result).toEqual({ ok: true });
+    } finally {
+      g[kDispatcher] = previous;
+      server.close();
+    }
+  }, 35_000); // red case burns the full 30s verify deadline; green resolves on the first attempt
 });
