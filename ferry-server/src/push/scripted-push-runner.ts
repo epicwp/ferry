@@ -20,7 +20,16 @@ export function scriptedPushRunner(script: { conflictOn?: PushStep; smokeFails?:
       for (const step of STEPS) {
         // Faithful to push.ts:124: the real runner emits an extra 'drift' start immediately
         // before the single /commit call (crash classification) — consumers see two starts.
-        if (step === 'drift') opts.onStep({ step: 'drift', status: 'start' });
+        const isDriftMarker = step === 'drift';
+        if (isDriftMarker) opts.onStep({ step: 'drift', status: 'start' });
+
+        // If drift conflicts, the real runner (push.ts:124) returns immediately without emitting
+        // the regular step start or fail event — the marker start is all that consumers see.
+        if (isDriftMarker && script.conflictOn === 'drift') {
+          const conflicts: Conflict[] = [{ key: 'drift-drift', expected: 'expected-value', found: 'found-value' }];
+          return { status: 'conflict', txid, conflicts };
+        }
+
         opts.onStep({ step, status: 'start' });
         await wait(5);
         const conflict = script.conflictOn === step;

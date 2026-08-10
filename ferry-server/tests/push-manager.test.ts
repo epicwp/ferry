@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ROLLBACK_FAILED_PREFIX } from '../src/push/types.js';
-import type { ChangeSpec, Conflict, PushOutcome, PushRunner } from '../src/push/types.js';
+import type { ChangeSpec, Conflict, PushOutcome, PushRunner, StepEvent } from '../src/push/types.js';
 import { scriptedPushRunner } from '../src/push/scripted-push-runner.js';
 import type { PushWireEvent } from '../src/push-manager.js';
 import { PushManager } from '../src/push-manager.js';
@@ -79,6 +79,22 @@ describe('PushManager', () => {
     const stored = store.changeBySeq(site.id, change.seq)!;
     expect(stored.status).toBe('conflict');
     expect(stored.conflict).toEqual([{ key: 'drift-drift', expected: 'expected-value', found: 'found-value' }]);
+  });
+
+  it('a drift conflict emits only the marker start, no regular start or fail (faithful to push.ts)', async () => {
+    const { site, change, manager } = setup(scriptedPushRunner({ conflictOn: 'drift' }));
+    const seen: PushWireEvent[] = [];
+    manager.subscribe(site.id, (e) => seen.push(e));
+    manager.start(site, change, {});
+    await until(() => seen.some((e) => e.type === 'push_done'));
+
+    const driftEvents = seen
+      .filter((e) => e.type === 'push_step')
+      .map((e) => e.payload as StepEvent)
+      .filter((p) => p.step === 'drift');
+    // Exactly one start event (the crash-marker), no fail (conflict returned early)
+    expect(driftEvents).toHaveLength(1);
+    expect(driftEvents[0]).toEqual({ step: 'drift', status: 'start' });
   });
 
   it('a smokeFails script yields status rolled_back (the real push() already auto-rolled-back)', async () => {
