@@ -57,5 +57,10 @@ export function scriptedPushRunner(script: { conflictOn?: PushStep; smokeFails?:
     async txStatus() {
       return 'unknown';
     },
+    async hashes(_slug, paths) {
+      // Deterministic formula shared with the e2e seed fixtures: a file whose oldHash is
+      // `scripted-${path}` reads as unchanged; anything else reads as drifted.
+      return Object.fromEntries(paths.map((p) => [p, `scripted-${p}`]));
+    },
   };
 }
