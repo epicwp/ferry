@@ -18,6 +18,12 @@ class FakeEnv implements CloneEnv {
   url(name: string): string {
     return `https://${name}.ddev.site`;
   }
+  async binlogPosition(): Promise<{ file: string; position: number }> {
+    return { file: 'ferry-bin.000001', position: 0 };
+  }
+  async extractBinlog(): Promise<string> {
+    return '';
+  }
 }
 
 const siteInfo = (over: Partial<SiteInfo> = {}): SiteInfo => ({

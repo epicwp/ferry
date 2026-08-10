@@ -32,6 +32,10 @@ final class ExcludesTest extends TestCase
             ['wp-content/upgrade/plugin.tmp'],
             ['wp-content/upgrade-temp-backup/plugins/x/x.php'],
             ['wp-config.php'],                             // §4.4: never over the bridge
+            ['wp-config.php.bak'],                         // security skim: backup copies carry DB creds
+            ['wp-config-old.php'],
+            ['wp-config.php~'],
+            ['.wp-config.php.swp'],                        // editor swap file
             ['wp-content/debug.log'],
             ['error_log'],
             ['wp-admin/error_log'],                        // error_log appears in many directories
@@ -56,6 +60,7 @@ final class ExcludesTest extends TestCase
             ['wp-content/themes/storefront/style.css'],
             ['wp-content/plugins/woocommerce/woocommerce.php'],
             ['wp-content/cachetest.php'],                  // prefix match must respect the slash
+            ['wp-content/themes/storefront/config.php'],   // "config" alone is not "wp-config"
             ['wp-content/mu-plugins/loader.php'],
             ['wp-content/mu-plugins/other-plugin.php'],
         ];

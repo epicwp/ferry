@@ -37,11 +37,14 @@ export async function ensureRepo(dir: string): Promise<void> {
     await runGit(dir, ['init', '-q']);
   }
   // Put HEAD on `production` whether the branch is unborn or already has commits,
-  // independent of the host's init.defaultBranch.
+  // independent of the host's init.defaultBranch. Never via `checkout`: after an agent
+  // session HEAD sits on agent/work and the pull has already written fetched files into
+  // the tree, which checkout refuses to cross whenever a pulled path also differs
+  // between the branches. The post-pull tree IS the new production truth — move HEAD
+  // and index without touching it; commitProduction() snapshots it right after.
+  await runGit(dir, ['symbolic-ref', 'HEAD', 'refs/heads/production']);
   if (await refExists(dir, 'refs/heads/production')) {
-    await runGit(dir, ['checkout', '-q', 'production']);
-  } else {
-    await runGit(dir, ['symbolic-ref', 'HEAD', 'refs/heads/production']);
+    await runGit(dir, ['reset', '-q']);
   }
   await runGit(dir, ['config', 'user.name', 'ferry']);
   await runGit(dir, ['config', 'user.email', 'ferry@localhost']);

@@ -1,0 +1,39 @@
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+/*!40019 SET @@session.max_delayed_threads=0*/;
+/*!50003 SET @OLD_COMPLETION_TYPE=@@COMPLETION_TYPE,COMPLETION_TYPE=0*/;
+DELIMITER /*!*/;
+# at 96635
+#260726 18:22:27 server id 1  end_log_pos 96677 CRC32 0x7fc9fc71 	GTID 0-1-10 trans
+/*M!100101 SET @@session.skip_parallel_replication=0*//*!*/;
+/*M!100001 SET @@session.gtid_domain_id=0*//*!*/;
+/*M!100001 SET @@session.server_id=1*//*!*/;
+/*M!100001 SET @@session.gtid_seq_no=10*//*!*/;
+START TRANSACTION
+/*!*/;
+# at 96677
+# at 96788
+#260726 18:22:27 server id 1  end_log_pos 96788 CRC32 0x44361cbb 	Annotate_rows:
+#Q> UPDATE `wp_options` SET `option_value` = 'world' WHERE `option_name` = 'ferry_spike_opt'
+#260726 18:22:27 server id 1  end_log_pos 96847 CRC32 0xa82ff087 	Table_map: `db`.`wp_options` mapped to number 18
+# at 96847
+#260726 18:22:27 server id 1  end_log_pos 96961 CRC32 0xbbaef4fe 	Update_rows: table id 18 flags: STMT_END_F
+### UPDATE `db`.`wp_options`
+### WHERE
+###   @1=506
+###   @2='ferry_spike_opt'
+###   @3='hello'
+###   @4='auto'
+### SET
+###   @1=506
+###   @2='ferry_spike_opt'
+###   @3='world'
+###   @4='auto'
+# Number of rows: 1
+# at 96961
+#260726 18:22:27 server id 1  end_log_pos 96992 CRC32 0x6ff7bdc1 	Xid = 299
+COMMIT/*!*/;
+DELIMITER ;
+# End of log file
+ROLLBACK /* added by mysqlbinlog */;
+/*!50003 SET COMPLETION_TYPE=@OLD_COMPLETION_TYPE*/;
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=0*/;

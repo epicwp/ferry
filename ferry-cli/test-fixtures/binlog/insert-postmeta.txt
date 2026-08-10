@@ -1,0 +1,34 @@
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+/*!40019 SET @@session.max_delayed_threads=0*/;
+/*!50003 SET @OLD_COMPLETION_TYPE=@@COMPLETION_TYPE,COMPLETION_TYPE=0*/;
+DELIMITER /*!*/;
+# at 95626
+#260726 18:21:35 server id 1  end_log_pos 95668 CRC32 0x8e1e393d 	GTID 0-1-6 trans
+/*M!100101 SET @@session.skip_parallel_replication=0*//*!*/;
+/*M!100001 SET @@session.gtid_domain_id=0*//*!*/;
+/*M!100001 SET @@session.server_id=1*//*!*/;
+/*M!100001 SET @@session.gtid_seq_no=6*//*!*/;
+START TRANSACTION
+/*!*/;
+# at 95668
+# at 95799
+#260726 18:21:35 server id 1  end_log_pos 95799 CRC32 0x227ed539 	Annotate_rows:
+#Q> INSERT INTO `wp_postmeta` (`post_id`, `meta_key`, `meta_value`) VALUES (5, 'ferry_spike_meta', 'hello_meta')
+#260726 18:21:35 server id 1  end_log_pos 95857 CRC32 0xfade1e0e 	Table_map: `db`.`wp_postmeta` mapped to number 27
+# at 95857
+#260726 18:21:35 server id 1  end_log_pos 95939 CRC32 0x5c88c047 	Write_rows: table id 27 flags: STMT_END_F
+### INSERT INTO `db`.`wp_postmeta`
+### SET
+###   @1=13
+###   @2=5
+###   @3='ferry_spike_meta'
+###   @4='hello_meta'
+# Number of rows: 1
+# at 95939
+#260726 18:21:35 server id 1  end_log_pos 95970 CRC32 0x07b17cd9 	Xid = 182
+COMMIT/*!*/;
+DELIMITER ;
+# End of log file
+ROLLBACK /* added by mysqlbinlog */;
+/*!50003 SET COMPLETION_TYPE=@OLD_COMPLETION_TYPE*/;
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=0*/;

@@ -4,12 +4,15 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { AgentManager } from './agent/manager.js';
 import type { AgentRunner } from './agent/types.js';
 import type { Engine } from './engine.js';
+import { PushManager } from './push-manager.js';
+import type { ChangeSpec, PushRunner } from './push/types.js';
 import { agentRoutes } from './routes/agent.js';
 import { authRoutes } from './routes/auth.js';
+import { changesRoutes } from './routes/changes.js';
 import { siteRoutes } from './routes/sites.js';
 import { syncRoutes } from './routes/sync.js';
 import { SyncManager } from './sync.js';
-import type { Store, User } from './store.js';
+import type { Change, Store, User } from './store.js';
 
 export const SESSION_COOKIE = 'ferry_session';
 
@@ -23,7 +26,22 @@ export interface AppDeps {
     cloneDir: (slug: string) => string;
     ensureBranch: (cloneDir: string) => Promise<void>;
     idleMs?: number;
+    // Passthroughs for the /changes routes (Task 13) to consume from `deps` directly —
+    // main.ts wires the real ones (ChangeService/journalCandidates); tests inject fakes.
+    journalCandidates?: (slug: string) => Promise<unknown>;
+    createChange?: (slug: string, input: Record<string, unknown>) => Promise<unknown>;
+    // main.ts's sdkRunner() is built before the AgentManager exists (it's constructed below,
+    // from the already-built runner) - this hands the instance back once it does, so a
+    // createChange override built ahead of time can reach appendSystemEvent for live SSE.
+    onManagerReady?: (agents: AgentManager) => void;
   };
+  push?: {
+    runner: PushRunner;
+  };
+}
+
+function specFor(change: Change): ChangeSpec {
+  return { files: change.files, ops: change.ops, preconditions: change.preconditions, smoke: change.smoke };
 }
 
 declare module 'fastify' {
@@ -74,8 +92,12 @@ export function buildApp(deps: AppDeps): FastifyInstance {
           idleMs: deps.agent.idleMs,
         })
       : undefined;
-    syncRoutes(app, deps, sync, agents);
-    if (agents) agentRoutes(app, deps, agents, sync);
+    if (agents) deps.agent?.onManagerReady?.(agents);
+    const push = deps.push ? new PushManager(deps.store, deps.push.runner, { specFor }) : undefined;
+    if (push) void push.recover().catch((err) => console.error('push recovery failed:', err));
+    syncRoutes(app, deps, sync, agents, push);
+    if (agents) agentRoutes(app, deps, agents, sync, push);
+    if (push) changesRoutes(app, deps, push, sync, agents);
   }
 
   app.get('/api/plugin.zip', { preHandler: app.requireUser }, async (_request, reply) => {

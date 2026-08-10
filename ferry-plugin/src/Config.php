@@ -15,6 +15,15 @@ final class Config
         'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DB_HOST',
     ];
 
+    /** Security skim: hosts/plugins put live API secrets in wp-config constants
+     *  (Stripe keys, SMTP passwords). Secret-shaped suffixes never travel - a missed
+     *  benign constant only costs the agent a hint, so over-matching is the safe side. */
+    public static function denied(string $name): bool
+    {
+        return in_array($name, self::DENYLIST, true)
+            || preg_match('/(_KEY|_SECRET|_TOKEN|_PASSWORD|_PASS|_PWD)$/', $name) === 1;
+    }
+
     /** @return string[] define()d constant names, in source order, deduplicated */
     public static function names_from_source(string $php): array
     {
@@ -57,7 +66,7 @@ final class Config
                 continue;
             }
             foreach (self::names_from_source((string) file_get_contents($path)) as $name) {
-                if (in_array($name, self::DENYLIST, true) || !defined($name)) {
+                if (self::denied($name) || !defined($name)) {
                     continue;
                 }
                 $value = constant($name);

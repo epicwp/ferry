@@ -1,0 +1,32 @@
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=1*/;
+/*!40019 SET @@session.max_delayed_threads=0*/;
+/*!50003 SET @OLD_COMPLETION_TYPE=@@COMPLETION_TYPE,COMPLETION_TYPE=0*/;
+DELIMITER /*!*/;
+# at 96396
+#260726 18:21:36 server id 1  end_log_pos 96438 CRC32 0x7342babf 	GTID 0-1-9 trans
+/*M!100101 SET @@session.skip_parallel_replication=0*//*!*/;
+/*M!100001 SET @@session.gtid_domain_id=0*//*!*/;
+/*M!100001 SET @@session.server_id=1*//*!*/;
+/*M!100001 SET @@session.gtid_seq_no=9*//*!*/;
+START TRANSACTION
+/*!*/;
+# at 96438
+# at 96503
+#260726 18:21:36 server id 1  end_log_pos 96503 CRC32 0x33630918 	Annotate_rows:
+#Q> DELETE FROM ferry_spike_table WHERE id = 1
+#260726 18:21:36 server id 1  end_log_pos 96564 CRC32 0x7bf4c960 	Table_map: `db`.`ferry_spike_table` mapped to number 29
+# at 96564
+#260726 18:21:36 server id 1  end_log_pos 96604 CRC32 0x877dae61 	Delete_rows: table id 29 flags: STMT_END_F
+### DELETE FROM `db`.`ferry_spike_table`
+### WHERE
+###   @1=1
+###   @2='x'
+# Number of rows: 1
+# at 96604
+#260726 18:21:36 server id 1  end_log_pos 96635 CRC32 0x781fa22d 	Xid = 189
+COMMIT/*!*/;
+DELIMITER ;
+# End of log file
+ROLLBACK /* added by mysqlbinlog */;
+/*!50003 SET COMPLETION_TYPE=@OLD_COMPLETION_TYPE*/;
+/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=0*/;

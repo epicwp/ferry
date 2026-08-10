@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AgentManager } from '../src/agent/manager.js';
 import { scriptedRunner } from '../src/agent/scripted-runner.js';
 import type { AgentRunner, AgentRunnerOpts, AgentWireEvent, RunnerEvent } from '../src/agent/types.js';
@@ -95,6 +95,38 @@ describe('AgentManager', () => {
     expect(manager.isActive(site.id)).toBe(false); // exit dropped the handle
   });
 
+  it('redacts runner error from customer SSE and logs it server-side', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failing: AgentRunner = {
+      start: (opts) => ({
+        send: () => {
+          opts.onEvent({ type: 'runner_error', message: 'Sensitive API error details' });
+          opts.onEvent({ type: 'exit' });
+        },
+        interrupt: async () => undefined,
+        close: async () => undefined,
+      }),
+    };
+    const { store, site, manager } = setup(failing);
+    const seen: AgentWireEvent[] = [];
+    manager.subscribe(site.id, (e) => seen.push(e));
+    const session = store.currentAgentSession(site.id) ?? store.createAgentSession(site.id);
+    await manager.send(site, 'hi');
+    await until(() => seen.some((e) => e.type === 'status' && (e.payload as { state?: string }).state === 'error'));
+
+    // Verify console.error was called with the raw message and site/session ids
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`agent runner error (site ${site.id}, session ${session.id}):`),
+      'Sensitive API error details'
+    );
+
+    // Verify the persisted status event has the generic detail, not the raw message
+    const statusEvent = seen.find((e) => e.type === 'status' && (e.payload as { state?: string }).state === 'error');
+    expect((statusEvent?.payload as { detail?: string })?.detail).toBe('The agent hit an internal error — try again or start a new session.');
+
+    consoleErrorSpy.mockRestore();
+  });
+
   it('concurrent first sends use a single runner spawn', async () => {
     const starts: AgentRunnerOpts[] = [];
     const inner = scriptedRunner();
@@ -176,5 +208,26 @@ describe('AgentManager', () => {
     expect(closed.length).toBeGreaterThan(0);
 
     await manager.shutdown();
+  });
+
+  it('appendSystemEvent persists+emits onto the current session', async () => {
+    const { store, site, manager } = setup(scriptedRunner());
+    await manager.send(site, 'first'); // creates a session
+    const session = store.currentAgentSession(site.id)!;
+    const seen: AgentWireEvent[] = [];
+    manager.subscribe(site.id, (e) => seen.push(e));
+
+    manager.appendSystemEvent(site.id, 'change_card', { changeId: 1, seq: 1, title: 'Fix VAT', status: 'draft' });
+
+    const stored = store.agentEventsAfter(session.id, 0);
+    expect(stored.at(-1)).toMatchObject({ type: 'change_card', payload: { changeId: 1, seq: 1, title: 'Fix VAT', status: 'draft' } });
+    expect(seen).toEqual([{ seq: stored.at(-1)!.seq, type: 'change_card', payload: { changeId: 1, seq: 1, title: 'Fix VAT', status: 'draft' } }]);
+    await manager.shutdown();
+  });
+
+  it('appendSystemEvent no-ops when the site has no session', () => {
+    const { store, site, manager } = setup(scriptedRunner());
+    expect(() => manager.appendSystemEvent(site.id, 'change_card', { changeId: 1 })).not.toThrow();
+    expect(store.currentAgentSession(site.id)).toBeUndefined();
   });
 });

@@ -29,6 +29,34 @@ describe('ensureRepo', () => {
     await ensureRepo(dir);
     expect(git(dir, 'symbolic-ref', '--short', 'HEAD')).toBe('production');
   });
+
+  it('returns HEAD to production from a diverged work branch without touching the tree', async () => {
+    // Live finding (Plan 5a acceptance): after an agent session HEAD stays on agent/work;
+    // the next pull writes fetched files into the tree first, and a plain
+    // `git checkout production` then refuses over those "local changes" whenever a pulled
+    // path also differs between the branches. HEAD must move without a tree touch — the
+    // post-pull tree IS the new production truth and is committed as the snapshot next.
+    await ensureRepo(dir);
+    await fsp.writeFile(join(dir, 'wp-version.php'), 'v1\n');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-q', '-m', 'snapshot v1');
+    git(dir, 'checkout', '-q', '-b', 'agent/work');
+    await fsp.writeFile(join(dir, 'journal.json'), '{}\n');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-q', '-m', 'agent work');
+    git(dir, 'checkout', '-q', 'production');
+    await fsp.writeFile(join(dir, 'wp-version.php'), 'v2\n');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-q', '-m', 'snapshot v2');
+    git(dir, 'checkout', '-q', 'agent/work');
+    // the "pull": production's newer content lands in the tree while agent/work is checked out
+    await fsp.writeFile(join(dir, 'wp-version.php'), 'v2\n');
+
+    await ensureRepo(dir);
+
+    expect(git(dir, 'symbolic-ref', '--short', 'HEAD')).toBe('production');
+    expect(await fsp.readFile(join(dir, 'wp-version.php'), 'utf8')).toBe('v2\n'); // tree untouched
+  });
 });
 
 describe('neutralizeNestedGit', () => {

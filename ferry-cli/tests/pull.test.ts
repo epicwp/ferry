@@ -29,6 +29,13 @@ class FakeEnv implements CloneEnv {
   url(name: string): string {
     return `https://${name}.ddev.site`;
   }
+  async binlogPosition(): Promise<{ file: string; position: number }> {
+    this.calls.push('binlogPosition');
+    return { file: 'ferry-bin.000001', position: 328 };
+  }
+  async extractBinlog(): Promise<string> {
+    return '';
+  }
 }
 
 const siteInfo = (over: Partial<SiteInfo> = {}): SiteInfo => ({
@@ -101,7 +108,7 @@ describe('pull', () => {
     expect(result.provenance.reused).toBe(0);
     expect(result.provenance.reconstructed).toBe(0);
     expect(existsSync(join(home, 'sites/fixture/provenance.json'))).toBe(true);
-    expect(env.calls).toEqual(['provision', 'importDb', 'createAdmin']);
+    expect(env.calls).toEqual(['provision', 'importDb', 'binlogPosition', 'createAdmin']);
     expect(env.wpConfigPresentAtImport).toBe(true);
     expect(readFileSync(join(clonePath, 'index.php'), 'utf8')).toBe('<?php // wp');
     expect(existsSync(join(clonePath, 'wp-content/object-cache.php.ferry-disabled'))).toBe(true);
@@ -110,6 +117,7 @@ describe('pull', () => {
     expect(dump).toContain('wp_options');
     const profile = JSON.parse(readFileSync(join(home, 'sites/fixture/profile.json'), 'utf8'));
     expect(profile.info.wp).toBe('6.5');
+    expect(profile.binlog).toEqual({ file: 'ferry-bin.000001', position: 328 });
 
     const git = (...args: string[]) => execFileSync('git', args, { cwd: clonePath, encoding: 'utf8' }).trim();
     expect(result.commit).toMatch(/^[0-9a-f]{40}$/);

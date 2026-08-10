@@ -116,7 +116,7 @@ describe('agent routes', () => {
     let releasePull: () => void = () => undefined;
     const engine = stubEngine({
       pull: () => new Promise((resolve) => { releasePull = () => resolve({ url: 'https://x.ddev.site' } as never); }),
-      verifyClone: async () => true,
+      verifyClone: async () => ({ ok: true }),
     });
     const { app, store } = makeApp({ engine, agent: agentDeps(scriptedRunner()) });
     const cookie = await signup(app);
@@ -137,7 +137,7 @@ describe('agent routes', () => {
 
   it('refuses to sync when the agent clone has uncommitted work on agent/work', async () => {
     const dir = makeAgentClone(true);
-    const engine = stubEngine({ pull: async () => ({ url: 'https://x.ddev.site' } as never), verifyClone: async () => true });
+    const engine = stubEngine({ pull: async () => ({ url: 'https://x.ddev.site' } as never), verifyClone: async () => ({ ok: true }) });
     const { app, store } = makeApp({ engine, agent: { ...agentDeps(scriptedRunner()), cloneDir: () => dir } });
     const cookie = await signup(app);
     const site = await readySite(app, cookie, store);
@@ -148,7 +148,7 @@ describe('agent routes', () => {
 
   it('allows sync when the agent clone is clean', async () => {
     const dir = makeAgentClone(false);
-    const engine = stubEngine({ pull: async () => ({ url: 'https://x.ddev.site' } as never), verifyClone: async () => true });
+    const engine = stubEngine({ pull: async () => ({ url: 'https://x.ddev.site' } as never), verifyClone: async () => ({ ok: true }) });
     const { app, store } = makeApp({ engine, agent: { ...agentDeps(scriptedRunner()), cloneDir: () => dir } });
     const cookie = await signup(app);
     const site = await readySite(app, cookie, store);

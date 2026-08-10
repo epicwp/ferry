@@ -23,6 +23,7 @@ export interface SiteProfile {
   slug: string;
   clonePath: string;
   info?: SiteInfo;
+  binlog?: { file: string; position: number };
 }
 
 // All state lives in readable files per site (SaaS spec §13) - the SaaS

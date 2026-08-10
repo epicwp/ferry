@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import type { IncomingHttpHeaders } from 'node:http';
 import { Readable } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -55,6 +56,16 @@ export class FerryClient {
     return { buffer, headers: res.headers as IncomingHttpHeaders };
   }
 
+  async postJson(route: string, body: unknown): Promise<{ data: any; headers: IncomingHttpHeaders }> {
+    const raw = JSON.stringify(body);
+    const res = await this.send('POST', route, {}, raw);
+    const text = await res.body.text();
+    if (res.statusCode !== 200) {
+      throw new Error(`POST ${route} failed (${res.statusCode}): ${text.slice(0, 300)}`);
+    }
+    return { data: JSON.parse(text), headers: res.headers as IncomingHttpHeaders };
+  }
+
   async postStream(
     route: string,
     body: unknown,
@@ -81,6 +92,7 @@ export class FerryClient {
     let lastError: unknown;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const timestamp = Math.floor((Date.now() + this.clockOffsetMs) / 1000);
+      const nonce = randomBytes(16).toString('hex'); // fresh per attempt: a retried request must not replay its own nonce
       const url = new URL(`/wp-json${route}`, this.baseUrl);
       for (const [k, v] of Object.entries(query)) {
         url.searchParams.set(k, v);
@@ -93,7 +105,8 @@ export class FerryClient {
           headers: {
             ...(body === '' ? {} : { 'content-type': 'application/json' }),
             'x-ferry-timestamp': String(timestamp),
-            'x-ferry-signature': sign(this.secret, method, route, query, body, timestamp),
+            'x-ferry-nonce': nonce,
+            'x-ferry-signature': sign(this.secret, method, route, query, body, timestamp, nonce),
           },
         });
       } catch (err) {

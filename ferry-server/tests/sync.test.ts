@@ -32,7 +32,7 @@ describe('SyncManager', () => {
     let emit: ((e: PullProgress) => void) | undefined;
     const { store, user, site, sync } = setup({
       pull: async (_slug, opts) => { emit = opts.onProgress; return done.promise; },
-      verifyClone: async () => true,
+      verifyClone: async () => ({ ok: true }),
     });
     const seen: SyncState[] = [];
     sync.subscribe(site, (s) => seen.push(s));
@@ -61,7 +61,7 @@ describe('SyncManager', () => {
   });
 
   it('fails when the clone does not verify', async () => {
-    const { store, user, site, sync } = setup({ pull: async () => RESULT, verifyClone: async () => false });
+    const { store, user, site, sync } = setup({ pull: async () => RESULT, verifyClone: async () => ({ ok: false }) });
     sync.start(site);
     await new Promise((r) => setTimeout(r, 20));
     expect(store.siteFor(user.id, site.id)!.status).toBe('error');
@@ -70,7 +70,7 @@ describe('SyncManager', () => {
 
   it('refuses a second concurrent sync and replays state to late subscribers', async () => {
     const done = deferred<PullResult>();
-    const { site, sync } = setup({ pull: async () => done.promise, verifyClone: async () => true });
+    const { site, sync } = setup({ pull: async () => done.promise, verifyClone: async () => ({ ok: true }) });
     sync.start(site);
     expect(() => sync.start(site)).toThrow('already_syncing');
     const seen: SyncState[] = [];
@@ -101,7 +101,7 @@ describe('SyncManager', () => {
     let emit: ((e: PullProgress) => void) | undefined;
     const { store, user, site, sync } = setup({
       pull: async (_slug, opts) => { emit = opts.onProgress; return done.promise; },
-      verifyClone: async () => true,
+      verifyClone: async () => ({ ok: true }),
     });
     const throwingSeen: SyncState[] = [];
     const goodSeen: SyncState[] = [];
@@ -131,7 +131,7 @@ describe('SyncManager', () => {
     const done = deferred<PullResult>();
     const { store, user, site, sync } = setup({
       pull: async () => done.promise,
-      verifyClone: async () => true,
+      verifyClone: async () => ({ ok: true }),
     });
     let callCount = 0;
     const unsubscribe = sync.subscribe(site, () => {
@@ -154,7 +154,7 @@ describe('SyncManager', () => {
 describe('sync routes', () => {
   it('starts a sync over HTTP and refuses unpaired sites', async () => {
     const done = deferred<PullResult>();
-    const { app } = makeApp({ engine: stubEngine({ link: async () => {}, pull: async () => done.promise, verifyClone: async () => true }) });
+    const { app } = makeApp({ engine: stubEngine({ link: async () => {}, pull: async () => done.promise, verifyClone: async () => ({ ok: true }) }) });
     const cookie = await signup(app);
     const created = await app.inject({ method: 'POST', url: '/api/sites', headers: { cookie }, payload: { name: 'S', url: 'https://klant.nl' } });
     const id = created.json().id as number;
@@ -173,7 +173,7 @@ describe('sync routes', () => {
     const done = deferred<PullResult>();
     let emit: ((e: PullProgress) => void) | undefined;
     const { app } = makeApp({
-      engine: stubEngine({ link: async () => {}, pull: async (_s, opts) => { emit = opts.onProgress; return done.promise; }, verifyClone: async () => true }),
+      engine: stubEngine({ link: async () => {}, pull: async (_s, opts) => { emit = opts.onProgress; return done.promise; }, verifyClone: async () => ({ ok: true }) }),
     });
     const cookie = await signup(app);
     const created = await app.inject({ method: 'POST', url: '/api/sites', headers: { cookie }, payload: { name: 'S', url: 'https://klant.nl' } });

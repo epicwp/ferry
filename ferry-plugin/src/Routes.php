@@ -14,6 +14,11 @@ final class Routes
             ['GET',  '/info',      'info'],
             ['GET',  '/manifest',  'manifest'],
             ['POST', '/files',     'files'],
+            ['POST', '/stage',     'stage'],
+            ['POST', '/commit',    'commit'],
+            ['POST', '/rollback',  'rollback'],
+            ['POST', '/hashes',    'hashes'],
+            ['GET',  '/tx',        'tx'],
             ['GET',  '/db/tables', 'db_tables'],
             ['GET',  '/db',        'db_export'],
         ];
@@ -33,6 +38,7 @@ final class Routes
         if (!$secret) {
             return new \WP_Error('ferry_unpaired', 'This site is not paired yet. Activate the plugin and pair with the code it shows.', ['status' => 403]);
         }
+        $nonce = $request->get_header('X-Ferry-Nonce');
         $ok = Auth::verify(
             $secret,
             $request->get_method(),
@@ -41,9 +47,17 @@ final class Routes
             $request->get_body(),
             $request->get_header('X-Ferry-Timestamp'),
             $request->get_header('X-Ferry-Signature'),
+            $nonce,
             time()
         );
-        return $ok ? true : new \WP_Error('ferry_bad_signature', 'Invalid or expired request signature.', ['status' => 401]);
+        if (!$ok) {
+            return new \WP_Error('ferry_bad_signature', 'Invalid or expired request signature.', ['status' => 401]);
+        }
+        global $wpdb;
+        if (!Nonces::consume($wpdb, $wpdb->prefix, (string) $nonce, time())) {
+            return new \WP_Error('ferry_replay', 'Request nonce already used or invalid.', ['status' => 401]);
+        }
+        return true;
     }
 
     public static function pair(\WP_REST_Request $request)
@@ -56,6 +70,93 @@ final class Routes
             return new \WP_Error('ferry_bad_code', 'Invalid or expired pairing code.', ['status' => 403]);
         }
         return ['secret' => $secret, 'siteurl' => get_option('siteurl')];
+    }
+
+    /** §8: stage file blobs for a pending write transaction. Per-file rejects never abort the batch. */
+    public static function stage(\WP_REST_Request $request)
+    {
+        if (is_multisite()) {
+            return new \WP_Error('ferry_multisite', 'Multisite is not supported. Ferry refuses multisite installs by design.', ['status' => 409]);
+        }
+        $params = $request->get_json_params();
+        $txid = (string) ($params['txid'] ?? '');
+        $files = (isset($params['files']) && is_array($params['files'])) ? $params['files'] : [];
+        $root = realpath(untrailingslashit(ABSPATH));
+        $result = Staging::add($root, $txid, $files);
+        if (isset($result['error'])) {
+            return new \WP_Error($result['error'], 'Invalid or malformed transaction id.', ['status' => 400]);
+        }
+        return $result;
+    }
+
+    /** §8: the commit sequence - atomic rename swap + DB transaction, all or nothing. */
+    public static function commit(\WP_REST_Request $request)
+    {
+        if (is_multisite()) {
+            return new \WP_Error('ferry_multisite', 'Multisite is not supported. Ferry refuses multisite installs by design.', ['status' => 409]);
+        }
+        $params = $request->get_json_params();
+        $txid = (string) ($params['txid'] ?? '');
+        $files = (isset($params['files']) && is_array($params['files'])) ? $params['files'] : [];
+        $ops = (isset($params['ops']) && is_array($params['ops'])) ? $params['ops'] : [];
+        $preconditions = (isset($params['preconditions']) && is_array($params['preconditions'])) ? $params['preconditions'] : [];
+        $force = !empty($params['force']);
+        $root = realpath(untrailingslashit(ABSPATH));
+        global $wpdb;
+        $result = Commit::run($root, $wpdb, $txid, $files, $ops, $preconditions, $force);
+        Tx::prune($root, time());
+        if (isset($result['error'])) {
+            return new \WP_Error($result['error'], 'Too many files in a single commit.', ['status' => 400]);
+        }
+        return $result;
+    }
+
+    /** §8: CAS-guarded restore from the backup dir, plus the inverse DB transaction. */
+    public static function rollback(\WP_REST_Request $request)
+    {
+        if (is_multisite()) {
+            return new \WP_Error('ferry_multisite', 'Multisite is not supported. Ferry refuses multisite installs by design.', ['status' => 409]);
+        }
+        $params = $request->get_json_params();
+        $txid = (string) ($params['txid'] ?? '');
+        $ops = (isset($params['ops']) && is_array($params['ops'])) ? $params['ops'] : [];
+        $root = realpath(untrailingslashit(ABSPATH));
+        global $wpdb;
+        return Commit::rollback($root, $wpdb, $txid, $ops);
+    }
+
+    /** §8: cheap targeted drift preview - no full manifest walk. */
+    public static function hashes(\WP_REST_Request $request)
+    {
+        if (is_multisite()) {
+            return new \WP_Error('ferry_multisite', 'Multisite is not supported. Ferry refuses multisite installs by design.', ['status' => 409]);
+        }
+        $params = $request->get_json_params();
+        $paths = (isset($params['paths']) && is_array($params['paths'])) ? $params['paths'] : [];
+        $root = realpath(untrailingslashit(ABSPATH));
+        $hashes = [];
+        foreach ($paths as $path) {
+            $resolved = Paths::resolve_read($root, (string) $path);
+            $hashes[(string) $path] = $resolved === null ? null : hash_file('sha256', $root . '/' . $resolved);
+        }
+        return ['hashes' => $hashes];
+    }
+
+    /** §8: tx status - a record stuck at "committing" reads as "dirty" (see Tx::read). */
+    public static function tx(\WP_REST_Request $request)
+    {
+        if (is_multisite()) {
+            return new \WP_Error('ferry_multisite', 'Multisite is not supported. Ferry refuses multisite installs by design.', ['status' => 409]);
+        }
+        $txid = (string) $request->get_param('txid');
+        $root = realpath(untrailingslashit(ABSPATH));
+        Tx::prune($root, time());
+        $meta = Tx::read($root, $txid);
+        $response = ['status' => $meta['status'] ?? 'unknown'];
+        if (isset($meta['committed_at'])) {
+            $response['committed_at'] = $meta['committed_at'];
+        }
+        return $response;
     }
 
     public static function info()
@@ -138,18 +239,13 @@ final class Routes
                 break;
             }
             $relpath = (string) $relpath;
-            $abs = realpath($root . '/' . $relpath);
-            if ($abs === false || strpos($abs, $root . DIRECTORY_SEPARATOR) !== 0) {
+            $resolved_rel = Paths::resolve_read($root, $relpath);
+            if ($resolved_rel === null) {
                 $skipped[] = $relpath;
                 $done++;
                 continue;
             }
-            $resolved_rel = str_replace(DIRECTORY_SEPARATOR, '/', substr($abs, strlen($root) + 1));
-            if ((Excludes::excluded($resolved_rel) && !Excludes::allowed_upload($resolved_rel)) || !is_file($abs)) {
-                $skipped[] = $relpath;
-                $done++;
-                continue;
-            }
+            $abs = $root . '/' . $resolved_rel;
             $fh = fopen($abs, 'rb');
             if ($fh === false) {
                 $skipped[] = $relpath;
@@ -179,16 +275,12 @@ final class Routes
         $offset = max(0, $offset);
         $length = max(0, $length);
         $root = realpath(untrailingslashit(ABSPATH));
-        $abs = realpath($root . '/' . $relpath);
-        if ($abs === false || strpos($abs, $root . DIRECTORY_SEPARATOR) !== 0) {
+        $resolved_rel = Paths::resolve_read($root, $relpath);
+        if ($resolved_rel === null) {
             status_header(404);
             exit;
         }
-        $resolved_rel = str_replace(DIRECTORY_SEPARATOR, '/', substr($abs, strlen($root) + 1));
-        if ((Excludes::excluded($resolved_rel) && !Excludes::allowed_upload($resolved_rel)) || !is_file($abs)) {
-            status_header(404);
-            exit;
-        }
+        $abs = $root . '/' . $resolved_rel;
         while (ob_get_level()) { ob_end_clean(); }
         header('Content-Type: application/octet-stream');
         $fh = fopen($abs, 'rb');

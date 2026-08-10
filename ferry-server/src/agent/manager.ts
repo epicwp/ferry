@@ -165,7 +165,8 @@ export class AgentManager {
         this.store.touchAgentSession(sessionId);
         return;
       case 'runner_error':
-        this.persistAndEmit(siteId, sessionId, 'status', { state: 'error', detail: event.message });
+        console.error(`agent runner error (site ${siteId}, session ${sessionId}):`, event.message);
+        this.persistAndEmit(siteId, sessionId, 'status', { state: 'error', detail: 'The agent hit an internal error — try again or start a new session.' });
         this.store.setAgentSessionStatus(sessionId, 'error');
         return;
       case 'exit': {
@@ -177,6 +178,14 @@ export class AgentManager {
         return;
       }
     }
+  }
+
+  /** Persist+emit onto the current session (e.g. a change_card from ChangeService.create);
+   *  no-op when the site has no session yet - there's nothing live to attach the event to. */
+  appendSystemEvent(siteId: number, type: string, payload: Record<string, unknown>): void {
+    const session = this.store.currentAgentSession(siteId);
+    if (!session) return;
+    this.persistAndEmit(siteId, session.id, type, payload);
   }
 
   private persistAndEmit(siteId: number, sessionId: number, type: string, payload: Record<string, unknown>): void {

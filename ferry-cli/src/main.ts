@@ -1,8 +1,13 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
 import { Command } from 'commander';
 import { fetchUploads } from './fetch-uploads.js';
+import { runGit } from './git.js';
 import { link } from './link.js';
+import { loadProfile } from './profile.js';
 import { pull } from './pull.js';
+import { push } from './push.js';
+import type { ChangeSpec } from './push-types.js';
 
 const program = new Command();
 
@@ -58,6 +63,47 @@ program
     if (result.skipped.length > 0) {
       console.log(`  Skipped ${result.skipped.length} (gone on production, or failed hash verification): ${result.skipped.slice(0, 5).join(', ')}${result.skipped.length > 5 ? ', ...' : ''}`);
     }
+  });
+
+program
+  .command('push <site>')
+  .description('Push staged changes back to production: stage, two-phase commit, smoke test, automatic rollback on failure')
+  .requiredOption('--spec <file>', 'path to the ChangeSpec JSON file')
+  .option('--force', 'skip drift checks (dangerous)')
+  .action(async (site: string, opts: { spec: string; force?: boolean }) => {
+    const profile = loadProfile(site);
+    const spec = JSON.parse(readFileSync(opts.spec, 'utf8')) as ChangeSpec;
+    const headSha = await runGit(profile.clonePath, ['rev-parse', 'HEAD']);
+    const result = await push(site, spec, {
+      headSha,
+      force: opts.force,
+      onStep: (e) => {
+        const duration = e.durationMs !== undefined ? ` (${e.durationMs}ms)` : '';
+        const detail = e.detail ? ` — ${e.detail}` : '';
+        console.log(`  ${e.step} ${e.status}${duration}${detail}`);
+      },
+    });
+    if (result.status === 'pushed') {
+      console.log(`✔ Pushed (txid ${result.txid})`);
+      for (const s of result.smoke) {
+        console.log(`  smoke: ${s.label} ${s.ok ? 'OK' : 'FAIL'} — ${s.detail}`);
+      }
+      return;
+    }
+    if (result.status === 'conflict') {
+      console.error(`✖ Conflict (txid ${result.txid})`);
+      for (const c of result.conflicts) {
+        console.error(`  ${c.key}: expected ${c.expected}, found ${c.found}`);
+      }
+    } else if (result.status === 'rolled_back') {
+      console.error(`✖ Rolled back (txid ${result.txid}): ${result.reason}`);
+      for (const s of result.smoke ?? []) {
+        console.error(`  smoke: ${s.label} ${s.ok ? 'OK' : 'FAIL'} — ${s.detail}`);
+      }
+    } else if (result.status === 'error') {
+      console.error(`✖ Error (txid ${result.txid}): ${result.detail}`);
+    }
+    process.exit(1);
   });
 
 program.parseAsync().catch((err: Error) => {
