@@ -1,7 +1,7 @@
 # Ferry Connect plugin — human security skim (scope & checklist)
 
-**Status:** NOT DONE — blocking. No real customer install until a human has completed
-checkpoint B below and signed off at the bottom of this document.
+**Status:** Checkpoint B DONE — signed 2026-08-10 at `e7d862a` (see sign-off table).
+Checkpoint A (design-stage) was never separately recorded.
 **Why now:** Plan 5 turns the plugin from read-only into one that accepts writes to
 customer production sites. The read-only surface was never human-skimmed either; the
 write surface must additionally be skimmed *as designed*, before it merges.
@@ -246,5 +246,5 @@ checkpoint. The lead-engineer recommendation on all three is **accept for v0**:
 
 | Checkpoint | Date | Commit SHA | By | Result / notes |
 |---|---|---|---|---|
-| A (design) | — | — | — | — |
-| B (code) | — | — | — | — |
+| A (design) | — | — | — | not separately recorded; write surface was skimmed as code at B |
+| B (code) | 2026-08-10 | `e7d862a` | Robbert Vermeulen | PASSED with three conscious v0 acceptances: (A) agent-reachable write secret until Plan 6 isolation; (B) pairing without rate limit; (C) uploads escape-hatch + nginx-inert `.htaccess` on staging (txid unguessability is the guard there). Three gaps fixed at this checkpoint: `wp-config*` read-side exclude, object-cache invalidation after COMMIT, secret-shaped constants filter. Signed via chat, agent-prepared pointers (section above). |
