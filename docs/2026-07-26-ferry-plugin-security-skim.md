@@ -119,6 +119,114 @@ Checkpoint A ≈ 30–45 min on the design doc; checkpoint B ≈ 60–90 min on 
       'options')` (and clear the `alloptions` cache key WP's option API also maintains) right
       after `COMMIT`, or accept this gap for v1 - **must be a conscious, dated sign-off below.**
 
+## Checkpoint B preparation — agent-prepared pointers (2026-08-10, `f7b0c3f`)
+
+Prepared per "Agents may prepare pointers" above. Status tags are the agent's reading —
+every judgement call is yours. Suites at this SHA: plugin 195 / cli 141 / server 159, all
+green. Five bugs were found and fixed during the live acceptance run (`42ee0dc`,
+`fe69f83`, `404e68e`, `82b8416`, `f7b0c3f`); the nonce and conflict pointers below
+describe the post-fix state. Some line refs in the checklist above predate Plan 5a —
+current locations are given here.
+
+### 1. Auth — all verified, one DECIDE
+- Canonical now signs `method\nroute\nquery\nbody\ntimestamp\nnonce` — `Auth::canonical`
+  (src/Auth.php:56), mirrored byte-for-byte in `ferry-cli/src/signing.ts:19`.
+  `rest_route`/`_locale` unset before signing; all other query params are inside it.
+- 60s window: `Auth::SIGNATURE_WINDOW` (src/Auth.php:7). `hash_equals` on both compares
+  (src/Auth.php:45, :84).
+- Nonce: `Nonces::consume` (src/Nonces.php) runs inside `Routes::authorize`
+  (src/Routes.php:57) — the `permission_callback` of every signed route, so it runs
+  before any handler. Store-atomic via the UNIQUE `option_name` index (concurrent same
+  nonce: second INSERT fails closed). Prunes each call (window 120s). Note: consume is
+  idempotent *within* one request (request-scoped static, `42ee0dc`) because WP core
+  re-invokes permission callbacks; cross-request replay still fails closed
+  (tests/NonceTest.php).
+- Pairing: 8 chars × 30-symbol alphabet via `random_int` (src/Auth.php:8,:17), 10-min
+  TTL, single-use, `hash_equals`. **DECIDE:** still no rate limit — the ~39-bit/10-min
+  math is unchanged from read-only days; confirm it still holds now that pairing yields
+  a write-capable secret, or require a lockout.
+- Secret at rest: `update_option('ferry_secret', $secret, false)` — autoload off
+  (src/Auth.php:49). Server-side the secret is per-site in
+  `~/.ferry/sites/<slug>/profile.json`, grants nothing beyond that site.
+
+### 2. /files path handling — verified
+- Guards moved from Routes.php inline to `Paths::resolve_read` (src/Paths.php:29):
+  `realpath` + prefix check; rejects NUL bytes, backslashes, and absolute paths
+  (src/Paths.php:44). Symlinks resolving outside `$root` are refused (realpath).
+- Exclusion runs on the resolved path; `Routes::files`/`send_range` only serve what
+  `resolve_read` returns (src/Routes.php:242, :278).
+
+### 3. wp-config & secrets — one GAP, two DECIDEs
+- `wp-config.php` exact-excluded read-side (src/Excludes.php:FILES) and the whole
+  `wp-config*` basename family is refused **write-side** (src/Paths.php:92).
+- **GAP (read-side, still open):** backup copies (`wp-config.php.bak`, `wp-config-old.php`,
+  `~`/swap files) are still NOT excluded from pulls — `Excludes::FILES` matches the exact
+  name only. They would travel with DB credentials into the clone repo the agent reads.
+  Decide: accept for v0 (own server only) or pattern-exclude before merge.
+- `Config::DENYLIST` (src/Config.php:12) is salts + `DB_*` only. **DECIDE:** the
+  `*_KEY`/`*_SECRET`/`*_TOKEN` pattern-filter question from the base doc stands.
+- Uploads hatch: `Excludes::allowed_upload` (src/Excludes.php:52) still serves any
+  explicitly requested uploads path; logs stay blocked. **DECIDE:** confirm acceptable
+  now the agent can request uploads autonomously (fetch_uploads tool).
+
+### 4. DB export — verified
+- Table interpolation only after `in_array($table, SHOW TABLES, true)`
+  (src/Routes.php:311); `single_pk`/key introspection uses `%i` (src/Db.php:63,:68 —
+  requires WP ≥ 6.2, fine for the 7.x fixture line).
+- Skip rules resolve server-side (`DbExcludes::plan`); unknown names 400
+  (src/Routes.php:317). No raw SQL crosses the wire.
+
+### 5. Write surface — verified, with one residual-risk note and the two acceptance items
+- Nonce precedes every write handler (same `authorize` permission_callback wiring,
+  src/Routes.php:25-31).
+- Staging under `wp-content/uploads/.ferry-staging/<txid>/`: txid must match
+  `^[0-9a-f]{32}$` (src/Staging.php:35 — unguessable), dir gets `index.php` stub +
+  `.htaccess "Require all denied"` (src/Staging.php:25-26); every staged path passes
+  `Paths::check_write` first (src/Staging.php via check_write). **Residual risk to
+  accept consciously:** `.htaccess` is inert on nginx hosts — there the protections are
+  the unguessable txid, upload-dir PHP-exec being commonly disabled, and short staging
+  lifetime (Tx::prune). Same applies to `.ferry-backup/<txid>/`.
+- Write denylist (src/Paths.php:92-110): `wp-config*` pattern, the plugin's own
+  directory under both slugs (`SELF_PLUGIN_DIRS`, src/Paths.php:24-27 — self-update =
+  auth bypass, refused case-insensitively after lexical normalization),
+  `.ferry-staging`/`.ferry-backup` internals, `wp-content/mu-plugins/ferry-*`, plus
+  everything `Excludes::excluded`. `..` segments are rejected outright; existing
+  symlink leaves resolving outside `$root` refused (src/Paths.php:44-91).
+- Typed ops only: closed kind-set with shape validation (src/DbOps.php:validate),
+  `REFUSED_TABLES` posts/comments/users(+meta) and `REFUSED_PATTERNS` woocommerce_/wc_/
+  actionscheduler_ (src/DbOps.php:22-23) — content tables refused at create-time
+  server-side too (ferry-server/src/changes.ts).
+- Two-phase commit: staged blobs re-hashed against manifest + caller's newHash before
+  any rename (src/Commit.php:47-53); same-volume renames, completed renames reverted on
+  later failure (src/Commit.php:6-11). Rollback is CAS-guarded, 30-day retention
+  (src/Tx.php:16), non-terminal statuses never pruned mid-flight (src/Tx.php:17,:53).
+- Drift transaction: `START TRANSACTION` → `SELECT … FOR UPDATE` on the full read-set →
+  compare → any mismatch ROLLBACKs having applied nothing; apply-statement failure
+  rolls back too (`apply_error`), no partial commit (src/DbOps.php:235-279). One drifted
+  value now reports one conflict (`82b8416`).
+- Smoke stays HTTP-level: `runSmoke` (ferry-cli/src/push.ts) does fetches only, with an
+  origin assertion against the site base (push.ts:230) closing the SSRF/backslash
+  bypass; paths validated server-side at create_change as well (defense in depth).
+- Multisite: every write handler opens with the `is_multisite()` 409 refusal
+  (src/Routes.php — stage/commit/rollback/hashes/tx).
+- Timeouts: staging is a resumable batch (manifest.json + per-file rejects never abort
+  the batch); commit is atomic behind the tx record — a lost `/commit` response is
+  classified conflict, never silently re-applied (drift:start-before-POST fix,
+  `a5bc71f`).
+- **Written-acceptance item 1 (agent-reachable write secret):** unchanged as described
+  above (lines 104-111). The agent subprocess can read `profile.json`; post-5a that
+  secret signs writes. Mitigations in place today: the change-card flow is the only
+  *intended* path, `FERRY_AGENT_MAX_BUDGET_USD` caps sessions, and pushes are
+  human-triggered — but a prompt-injected agent could sign `/stage`/`/commit` directly.
+  Plan 6 isolation is the designed fix. Sign consciously below.
+- **Written-acceptance item 2 (raw-SQL option writes bypass persistent object caches):**
+  unchanged as described above (lines 112-120). `DbOps::apply()` writes `wp_options`
+  via `$wpdb->query()`; on Redis/Memcached hosts the cached value (incl. `alloptions`)
+  is not invalidated — the site and even the smoke check can keep seeing the stale
+  value. The dev fixture has no persistent cache, so the acceptance run could not
+  surface it. Either add `wp_cache_delete` after COMMIT (small, plugin-side) or accept
+  for v1. Sign consciously below.
+
 ## Sign-off
 
 | Checkpoint | Date | Commit SHA | By | Result / notes |
