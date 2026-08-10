@@ -45,7 +45,7 @@ export function changesRoutes(
     if (!change) return reply.code(404).send({ error: 'Change not found.' });
     // Same guard trio as sync.ts: sync running, agent mid-turn, another push already running.
     if (sync.isRunning(site.id)) return reply.code(409).send({ error: 'A sync is running for this site.' });
-    if (agents?.isActive(site.id)) {
+    if (agents?.isMidTurn(site.id)) {
       return reply.code(409).send({ error: 'The agent is working on this site — finish or start a new session first.' });
     }
     const force = !!(request.body as { force?: boolean } | undefined)?.force;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { scriptedRunner } from '../src/agent/scripted-runner.js';
-import type { AgentWireEvent } from '../src/agent/types.js';
+import type { AgentRunner, AgentWireEvent } from '../src/agent/types.js';
 import { scriptedPushRunner } from '../src/push/scripted-push-runner.js';
 import type { PushWireEvent } from '../src/push-manager.js';
 import type { StepEvent } from '../src/push/types.js';
@@ -76,7 +76,7 @@ describe('changes routes', () => {
     expect(store.changeBySeq(site.id, change.seq)!.status).toBe('pushed');
   });
 
-  it('refuses to push while the agent is active on this site (409)', async () => {
+  it('allows a push while the agent session is hot but idle', async () => {
     const { app, store } = makeApp({
       engine: stubEngine(), agent: agentDeps(scriptedRunner()), push: { runner: scriptedPushRunner() },
     });
@@ -85,8 +85,30 @@ describe('changes routes', () => {
     const change = draftChange(store, site.id);
 
     await app.inject({ method: 'POST', url: `/api/sites/${site.id}/agent/messages`, headers: { cookie }, payload: { text: 'hi' } });
+    await until(() => store.currentAgentSession(site.id)?.status === 'idle');
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${change.seq}/push`, headers: { cookie } });
+    expect(res.statusCode).toBe(202);
+  });
+
+  it('refuses a push mid-turn', async () => {
+    const runner: AgentRunner = {
+      start: (_opts) => ({
+        send: () => { /* never emits turn_end - the turn never completes */ },
+        interrupt: async () => undefined,
+        close: async () => undefined,
+      }),
+    };
+    const { app, store } = makeApp({
+      engine: stubEngine(), agent: agentDeps(runner), push: { runner: scriptedPushRunner() },
+    });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const change = draftChange(store, site.id);
+
+    await app.inject({ method: 'POST', url: `/api/sites/${site.id}/agent/messages`, headers: { cookie }, payload: { text: 'hi' } });
     const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${change.seq}/push`, headers: { cookie } });
     expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'The agent is working on this site — finish or start a new session first.' });
   });
 
   it('refuses to push while a sync is running (409)', async () => {
