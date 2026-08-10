@@ -26,20 +26,27 @@ test('the changes tab lists changes with status pills, filters and a draft badge
   await signUp(page);
   const siteId = await createSite(page, 'List shop', `https://list-${Date.now()}.example.com`);
   await seedChange(page, siteId); // draft
-  await seedChange(page, siteId, { status: 'pushed' });
+  await seedChange(page, siteId, { status: 'pushed', fields: { title: 'Pushed with smoke' } });
   await seedChange(page, siteId, { status: 'rolled_back' });
+  await seedChange(page, siteId, { status: 'pushed', fields: { title: 'Pushed no smoke data' }, smokeResult: null });
 
   await page.goto(`/sites/${siteId}/changes`);
   await expect(page.locator('.changes__title')).toHaveText('Changes');
-  await expect(page.locator('.change-row')).toHaveCount(3);
+  await expect(page.locator('.change-row')).toHaveCount(4);
   await expect(page.locator('.change-row--draft .status-pill')).toHaveText('draft');
-  await expect(page.locator('.status-pill--pushed')).toHaveText('pushed');
+  await expect(page.locator('.status-pill--pushed').first()).toHaveText('pushed');
   await expect(page.locator('.status-pill--rolled_back')).toHaveText('rolled back');
   // draft row: amber border + Push action; others: View
   await expect(page.locator('.change-row--draft').getByRole('button', { name: 'Push' })).toBeVisible();
   await expect(page.locator('.change-row').filter({ hasText: 'pushed' }).first().getByRole('link', { name: 'View' })).toBeVisible();
+  // honest smoke meta: default smokeResult -> "smoke test ✓"; explicit smokeResult: null -> "smoke unknown"
+  const pushedWithSmoke = page.locator('.change-row').filter({ hasText: 'Pushed with smoke' });
+  await expect(pushedWithSmoke.locator('.change-row__meta')).toContainText('smoke test ✓');
+  const pushedNoSmoke = page.locator('.change-row').filter({ hasText: 'Pushed no smoke data' });
+  await expect(pushedNoSmoke.locator('.change-row__meta')).toContainText('smoke unknown');
+  await expect(pushedNoSmoke.locator('.change-row__meta')).not.toContainText('smoke test ✓');
   // filter pills with counts
-  await expect(page.locator('.filter-pill--active')).toHaveText('all 3');
+  await expect(page.locator('.filter-pill--active')).toHaveText('all 4');
   await page.getByRole('button', { name: 'draft 1' }).click();
   await expect(page.locator('.change-row')).toHaveCount(1);
   // sidebar: Changes is a live link here with the draft-count badge

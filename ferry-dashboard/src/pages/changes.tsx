@@ -15,7 +15,8 @@ function rowMeta(change: Change): { text: string; failed: boolean } {
     return { text: 'smoke test failed → rolled back automatically · no impact on prod', failed: true };
   }
   if (change.status === 'pushed') {
-    return { text: `pushed ${timeAgo(change.pushedAt ?? change.createdAt)} · smoke test ✓ · @${change.prodRef ?? ''}`, failed: false };
+    const smokeText = change.smokeResult !== null && change.smokeResult.every((s) => s.ok) ? 'smoke test ✓' : 'smoke unknown';
+    return { text: `pushed ${timeAgo(change.pushedAt ?? change.createdAt)} · ${smokeText} · @${change.prodRef ?? ''}`, failed: false };
   }
   const opsLabel = change.ops.length === 0 ? null
     : change.ops.every((o) => o.kind.startsWith('option_'))

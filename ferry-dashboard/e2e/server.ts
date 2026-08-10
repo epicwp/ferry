@@ -125,7 +125,7 @@ app.post('/e2e/changes', async (request) => {
       prodRef: body.prodRef ?? (body.status === 'pushed' ? 'f4b81ad' : null),
       pushedAt: body.status === 'pushed' || body.status === 'rolled_back' ? new Date().toISOString() : undefined,
       rolledBackAt: body.status === 'rolled_back' ? new Date().toISOString() : undefined,
-      smokeResult: body.smokeResult ?? (body.status === 'pushed'
+      smokeResult: 'smokeResult' in body ? body.smokeResult : (body.status === 'pushed'
         ? [
             { label: 'Checkout — VAT on a €120 order is correct', ok: true, detail: '€24.79' },
             { label: 'Order list loads without PHP warnings', ok: true, detail: '200' },

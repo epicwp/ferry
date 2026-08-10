@@ -69,9 +69,9 @@ export type ChangeStatus = 'draft' | 'pushing' | 'pushed' | 'conflict' | 'rolled
 
 export type DbOp =
   | { kind: 'option_set'; name: string; old: string | null; new: string }
-  | { kind: 'option_delete'; name: string; old: string | null }
+  | { kind: 'option_delete'; name: string; old: string }
   | { kind: 'postmeta_set'; postId: number; key: string; old: string | null; new: string }
-  | { kind: 'postmeta_delete'; postId: number; key: string; old: string | null }
+  | { kind: 'postmeta_delete'; postId: number; key: string; old: string }
   | { kind: 'row_update'; table: string; pkCol: string; pk: number; old: Record<string, string | null>; new: Record<string, string | null> }
   | { kind: 'row_insert'; table: string; pkCol: string; pk: number; new: Record<string, string | null> }
   | { kind: 'row_delete'; table: string; pkCol: string; pk: number; old: Record<string, string | null> };

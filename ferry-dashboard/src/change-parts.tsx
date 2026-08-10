@@ -82,9 +82,9 @@ export function DiffView({ diffText }: { diffText: string }) {
 function opCells(op: DbOp): { verb: string; key: string; old: string; new_: string } {
   switch (op.kind) {
     case 'option_set': return { verb: 'UPDATE', key: `options · ${op.name}`, old: op.old ?? '—', new_: op.new };
-    case 'option_delete': return { verb: 'DELETE', key: `options · ${op.name}`, old: op.old ?? '—', new_: '—' };
+    case 'option_delete': return { verb: 'DELETE', key: `options · ${op.name}`, old: op.old, new_: '—' };
     case 'postmeta_set': return { verb: 'UPDATE', key: `postmeta · post ${op.postId} · ${op.key}`, old: op.old ?? '—', new_: op.new };
-    case 'postmeta_delete': return { verb: 'DELETE', key: `postmeta · post ${op.postId} · ${op.key}`, old: op.old ?? '—', new_: '—' };
+    case 'postmeta_delete': return { verb: 'DELETE', key: `postmeta · post ${op.postId} · ${op.key}`, old: op.old, new_: '—' };
     case 'row_update': return { verb: 'UPDATE', key: `${op.table} · ${op.pkCol}=${op.pk}`, old: `${Object.keys(op.old).length} columns`, new_: `${Object.keys(op.new).length} columns` };
     case 'row_insert': return { verb: 'INSERT', key: `${op.table} · ${op.pkCol}=${op.pk}`, old: '—', new_: `${Object.keys(op.new).length} columns` };
     case 'row_delete': return { verb: 'DELETE', key: `${op.table} · ${op.pkCol}=${op.pk}`, old: `${Object.keys(op.old).length} columns`, new_: '—' };

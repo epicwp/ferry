@@ -369,7 +369,7 @@ function PushedView({ change, siteId, onReload, actionError, setActionError }: {
           <div className="strip">
             <div>
               <div className="section-label">Applied</div>
-              <div style={{ fontSize: 12.5 }}>{change.files.length} files · {change.ops.length} DB operation{change.ops.length === 1 ? '' : 's'}</div>
+              <div style={{ fontSize: 12.5 }}>{change.files.length} file{change.files.length === 1 ? '' : 's'} · {change.ops.length} DB operation{change.ops.length === 1 ? '' : 's'}</div>
             </div>
             <div>
               <div className="section-label">Backup</div>
@@ -403,7 +403,7 @@ function RolledBackView({ change, siteId }: { change: Change; siteId: number }) 
         </div>
       </div>
       <div className="change-section">
-        <div className="verify-row"><span className="check-dot">✓</span><span>{change.files.length} files restored from backup</span><span className="verify-row__value mono">.ferry-backup/{(change.backupTxid ?? '').slice(0, 7)}</span></div>
+        <div className="verify-row"><span className="check-dot">✓</span><span>{change.files.length} file{change.files.length === 1 ? '' : 's'} restored from backup</span><span className="verify-row__value mono">.ferry-backup/{(change.backupTxid ?? '').slice(0, 7)}</span></div>
         <div className="verify-row"><span className="check-dot">✓</span><span>DB journal replayed in reverse</span><span className="verify-row__value mono">{change.ops.length} operation{change.ops.length === 1 ? '' : 's'}</span></div>
         <div className="verify-row"><span className="check-dot">✓</span><span>Verification — hashes match the snapshot</span></div>
       </div>
