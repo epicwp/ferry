@@ -168,7 +168,12 @@ export class ChangeService {
     // Validate everything first - no journal commit on a change that then fails validation.
     validateOps(input.ops, this.deps.prefixFor(site.slug));
     for (const p of input.preconditions) {
-      if (!isValidPrecondition(p)) throw new Error('invalid_precondition');
+      if (!isValidPrecondition(p)) {
+        throw new Error(
+          'invalid_precondition: expected {type:"option",name,expected} | {type:"file_hash",path,expected} | ' +
+            '{type:"row",table,pkCol,pk,column,expected} — expected is the pre-change value (string or null)',
+        );
+      }
     }
     for (const s of input.smoke) {
       if (!isValidSmokeCheck(s)) throw new Error('invalid_smoke');

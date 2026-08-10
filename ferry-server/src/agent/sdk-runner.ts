@@ -84,10 +84,19 @@ export function buildFerryTools(slug: string, deps: SdkRunnerDeps): unknown[] {
     ),
     tool(
       'create_change',
-      'Create a draft change card from your committed work on agent/work. The human pushes; you cannot.',
+      'Create a draft change card from your committed work on agent/work. The human pushes; you cannot. ' +
+        'Every op needs a matching precondition (expected = the op\'s old value) so the push refuses if production drifted.',
       {
         title: z.string().min(4), summary: z.string().min(10),
-        ops: z.array(z.record(z.string(), z.unknown())), preconditions: z.array(z.record(z.string(), z.unknown())),
+        ops: z.array(z.record(z.string(), z.unknown())),
+        preconditions: z.array(z.discriminatedUnion('type', [
+          z.object({ type: z.literal('option'), name: z.string(), expected: z.string().nullable() }),
+          z.object({ type: z.literal('file_hash'), path: z.string(), expected: z.string() }),
+          z.object({
+            type: z.literal('row'), table: z.string(), pkCol: z.string(), pk: z.number(),
+            column: z.string(), expected: z.string().nullable(),
+          }),
+        ])),
         smoke: z.array(z.object({ label: z.string(), path: z.string(), expectStatus: z.number(), expectText: z.string().optional() })),
       },
       async (args: CreateChangeToolInput) => text(JSON.stringify(await deps.createChange(slug, args))),

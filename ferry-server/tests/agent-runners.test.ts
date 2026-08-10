@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { scriptedRunner } from '../src/agent/scripted-runner.js';
 import { buildFerryTools } from '../src/agent/sdk-runner.js';
 import type { RunnerEvent } from '../src/agent/types.js';
@@ -130,5 +131,40 @@ describe('buildFerryTools handlers', () => {
     const result = await createTool.handler(input);
     expect(calls).toEqual([['klant-nl', input]]);
     expect(JSON.parse(result.content[0]!.text)).toEqual({ id: 1, seq: 1, status: 'draft' });
+  });
+
+  it('create_change schema teaches the exact precondition shapes, rejecting invented ones', () => {
+    // Live finding (Plan 5a acceptance): with a loose schema the agent invented
+    // {kind, value} / {kind, old} shapes, got a bare invalid_precondition back, and
+    // "fixed" it by dropping preconditions entirely — leaving the change unguarded.
+    const tools = buildFerryTools('klant-nl', {
+      fetchUploads: async () => ({}),
+      loadProfile: () => ({ url: 'https://klant.nl' }),
+      journalCandidates: async () => ({ ops: [], refusedCount: 0, noiseCount: 0 }),
+      createChange: async () => ({}),
+    });
+    const createTool = (tools as { name: string; inputSchema: Record<string, z.ZodType> }[])
+      .find((t) => t.name === 'create_change')!;
+    const schema = z.object(createTool.inputSchema);
+    const base = {
+      title: 'Fix VAT calc', summary: 'VAT was computed pre-discount.',
+      ops: [{ kind: 'option_set', name: 'blogname', old: 'A', new: 'B' }],
+      smoke: [{ label: 'home', path: '/', expectStatus: 200 }],
+    };
+    const valid = [
+      { type: 'option', name: 'blogdescription', expected: '' },   // empty string is a real value
+      { type: 'option', name: 'blogname', expected: null },        // null = absent before
+      { type: 'file_hash', path: 'wp-content/x.php', expected: 'ab'.repeat(32) },
+      { type: 'row', table: 'wp_posts', pkCol: 'ID', pk: 7, column: 'post_title', expected: 'x' },
+    ];
+    expect(schema.safeParse({ ...base, preconditions: valid }).success).toBe(true);
+    const invented = [
+      { kind: 'option_equals', name: 'blogdescription', value: '' },
+      { kind: 'option_set', name: 'blogdescription', old: '' },
+      { type: 'option', name: 'blogdescription' }, // missing expected
+    ];
+    for (const p of invented) {
+      expect(schema.safeParse({ ...base, preconditions: [p] }).success).toBe(false);
+    }
   });
 });
