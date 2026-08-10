@@ -185,6 +185,20 @@ test('3b gate: sign up → add site → pair → watch progress → ready in the
   await page.reload();
   await expect(page.locator('.ccard')).toBeVisible();
 
+  // ---- 5b: a failed change-detail fetch degrades honestly, not silently ----
+  await page.route('**/api/sites/*/changes/*', (route) => {
+    const r = route.request();
+    if (r.method() === 'GET' && /\/api\/sites\/\d+\/changes\/\d+$/.test(r.url())) return route.abort();
+    return route.continue();
+  });
+  await page.reload();
+  await expect(page.locator('.ccard__title')).toHaveText('VAT calculation fixed'); // from the event payload, not the failed fetch
+  await expect(page.locator('.ccard')).toContainText("Couldn't load the change details — open it via View diff.");
+  await expect(page.getByRole('link', { name: 'View diff' })).toBeVisible();
+  await page.unroute('**/api/sites/*/changes/*');
+  await page.reload();
+  await expect(page.locator('.ccard')).toContainText('2 files changed'); // healthy again for the sections below
+
   // View diff navigates to the change page
   await page.getByRole('link', { name: 'View diff' }).click();
   await expect(page).toHaveURL(`/sites/${siteId}/changes/${seeded.seq}`);

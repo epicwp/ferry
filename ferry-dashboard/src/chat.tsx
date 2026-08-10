@@ -13,7 +13,7 @@ type Block =
   | { kind: 'tools'; key: string; rows: ToolRow[] }
   | { kind: 'status'; key: string; text: string; isError?: boolean }
   | { kind: 'turn_end'; key: string; text: string }
-  | { kind: 'change_card'; key: string; changeSeq: number; title: string };
+  | { kind: 'change_card'; key: string; changeSeq: number; title: string; status: string };
 
 const ERROR_SUBTYPES = new Set(['error_max_turns', 'error_max_budget_usd', 'error_during_execution']);
 
@@ -84,6 +84,7 @@ function buildBlocks(events: AgentWireEvent[]): Block[] {
           kind: 'change_card', key,
           changeSeq: Number(event.payload.seq ?? 0), // the CHANGE seq, not the wire seq
           title: String(event.payload.title ?? ''),
+          status: String(event.payload.status ?? ''),
         });
         break;
       default:
@@ -210,7 +211,15 @@ export function AgentChat({ siteId }: { siteId: number }) {
             );
           }
           if (block.kind === 'change_card') {
-            return <InlineChangeCard key={block.key} siteId={siteId} changeSeq={block.changeSeq} title={block.title} />;
+            return (
+              <InlineChangeCard
+                key={block.key}
+                siteId={siteId}
+                changeSeq={block.changeSeq}
+                title={block.title}
+                status={block.status}
+              />
+            );
           }
           if (block.kind === 'status') {
             return (

@@ -130,13 +130,14 @@ export function ConfirmDialog({ title, body, confirmLabel, danger, onConfirm, on
   );
 }
 
-export function InlineChangeCard({ siteId, changeSeq, title }: { siteId: number; changeSeq: number; title: string }) {
+export function InlineChangeCard({ siteId, changeSeq, title, status }: { siteId: number; changeSeq: number; title: string; status: string }) {
   const [change, setChange] = useState<Change | null>(null);
   const [pushError, setPushError] = useState('');
+  const [fetchError, setFetchError] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
-    void getChange(siteId, changeSeq).then(setChange).catch(() => undefined);
+    void getChange(siteId, changeSeq).then(setChange).catch(() => setFetchError(true));
   }, [siteId, changeSeq]);
 
   async function push() {
@@ -156,7 +157,7 @@ export function InlineChangeCard({ siteId, changeSeq, title }: { siteId: number;
       <div className="ccard__head">
         <span className="state-icon state-icon--ok">✓</span>
         <span className="ccard__title">{change?.title ?? title}</span>
-        <span className="ccard__ref mono">{changeRef(changeSeq)} · {change ? change.status : '…'}</span>
+        <span className="ccard__ref mono">{changeRef(changeSeq)} · {change ? change.status : status}</span>
       </div>
       {change && (
         <>
@@ -189,15 +190,20 @@ export function InlineChangeCard({ siteId, changeSeq, title }: { siteId: number;
             </div>
           )}
           {pushError !== '' && <div className="ccard__row"><span className="ccard__row-detail" style={{ color: 'var(--red)' }}>{pushError}</span></div>}
-          <div className="ccard__footer">
-            <span className="ccard__note mono">nothing goes to production automatically</span>
-            <Link to={`/sites/${siteId}/changes/${changeSeq}`} role="link" className="btn btn--outline btn--sm">View diff</Link>
-            {change.status === 'draft' && (
-              <button type="button" className="btn btn--push btn--sm" onClick={push}>Push to production</button>
-            )}
-          </div>
         </>
       )}
+      {fetchError && (
+        <div className="ccard__row">
+          <span className="ccard__row-detail" style={{ color: 'var(--red)' }}>Couldn't load the change details — open it via View diff.</span>
+        </div>
+      )}
+      <div className="ccard__footer">
+        <span className="ccard__note mono">nothing goes to production automatically</span>
+        <Link to={`/sites/${siteId}/changes/${changeSeq}`} role="link" className="btn btn--outline btn--sm">View diff</Link>
+        {change?.status === 'draft' && (
+          <button type="button" className="btn btn--push btn--sm" onClick={push}>Push to production</button>
+        )}
+      </div>
     </div>
   );
 }
