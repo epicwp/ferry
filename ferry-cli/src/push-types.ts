@@ -12,6 +12,7 @@ export type Precondition =
   | { type: 'file_hash'; path: string; expected: string }                       // sha256 hex
   | { type: 'row'; table: string; pkCol: string; pk: number; column: string; expected: string | null };
 export interface SmokeCheck { label: string; path: string; expectStatus: number; expectText?: string }
+export interface SmokeResult { label: string; ok: boolean; detail?: string }
 export interface ChangeFile { path: string; newHash: string | null; oldHash: string | null } // newHash null = delete; oldHash null = new file
 export interface ChangeSpec { files: ChangeFile[]; ops: DbOp[]; preconditions: Precondition[]; smoke: SmokeCheck[] }
 export type PushStep = 'staging' | 'hashes' | 'drift' | 'swap' | 'journal' | 'smoke';
@@ -24,9 +25,9 @@ export interface Conflict { key: string; expected: string; found: string }
  *  can't drift apart on the wording. */
 export const ROLLBACK_FAILED_PREFIX = 'smoke failed AND automatic rollback failed';
 export type PushOutcome =
-  | { status: 'pushed'; txid: string; smoke: { label: string; ok: boolean; detail: string }[] }
+  | { status: 'pushed'; txid: string; smoke: SmokeResult[] }
   | { status: 'conflict'; txid: string; conflicts: Conflict[] }
-  | { status: 'rolled_back'; txid: string; reason: string; smoke?: { label: string; ok: boolean; detail: string }[] }
+  | { status: 'rolled_back'; txid: string; reason: string; smoke?: SmokeResult[] }
   // Controller decision (Task 11): /commit's `apply_error` (locks held, a statement failed, plugin
   // reverted everything) or `denied` (malformed/hostile change) - neither is a drift conflict, and
   // nothing was applied. Task 13 maps this back to draft with `detail` recorded.

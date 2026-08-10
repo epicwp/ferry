@@ -162,5 +162,37 @@ describe('Store', () => {
       store.setChangeStatus(change.id, 'pushing', { backupTxid: 'tx123' });
       expect(store.recoverInterruptedPushes()).toEqual([{ changeId: change.id, backupTxid: 'tx123' }]);
     });
+
+    it('migrates a database created before smoke_result_json existed, idempotently', () => {
+      const dbPath = join(dir, 'legacy.db');
+      const raw = new Database(dbPath);
+      raw.exec(`
+        CREATE TABLE changes (
+          id INTEGER PRIMARY KEY, site_id INTEGER NOT NULL,
+          seq INTEGER NOT NULL, status TEXT NOT NULL,
+          title TEXT NOT NULL, summary TEXT NOT NULL, branch TEXT NOT NULL,
+          base_sha TEXT NOT NULL, head_sha TEXT NOT NULL, diff_text TEXT NOT NULL,
+          files_json TEXT NOT NULL, ops_json TEXT NOT NULL,
+          preconditions_json TEXT NOT NULL, smoke_json TEXT NOT NULL,
+          backup_txid TEXT, prod_ref TEXT, conflict_json TEXT,
+          created_at TEXT NOT NULL, pushed_at TEXT, rolled_back_at TEXT,
+          UNIQUE(site_id, seq)
+        );
+      `);
+      raw
+        .prepare(
+          `INSERT INTO changes (site_id, seq, status, title, summary, branch, base_sha, head_sha, diff_text, files_json, ops_json, preconditions_json, smoke_json, created_at)
+           VALUES (1, 1, 'draft', 't', 's', 'agent/work', 'a', 'b', 'd', '[]', '[]', '[]', '[]', ?)`,
+        )
+        .run(new Date().toISOString());
+      raw.close();
+
+      const migrated = new Store(dbPath);
+      expect(migrated.changeById(1)).toMatchObject({ smokeResult: null });
+      migrated.close();
+
+      // Re-opening (column now present) must not throw - the ALTER TABLE guard is idempotent.
+      expect(() => new Store(dbPath).close()).not.toThrow();
+    });
   });
 });

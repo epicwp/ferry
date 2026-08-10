@@ -109,6 +109,29 @@ describe('PushManager', () => {
     expect(stored.rolledBackAt).not.toBeNull();
   });
 
+  it('persists the smoke results on a pushed change', async () => {
+    const { store, site, change, manager } = setup(scriptedPushRunner());
+    const seen: PushWireEvent[] = [];
+    manager.subscribe(site.id, (e) => seen.push(e));
+    manager.start(site, change, {});
+    await until(() => seen.some((e) => e.type === 'push_done'));
+
+    const after = store.changeById(change.id)!;
+    expect(after.smokeResult).toEqual([{ label: 'home', ok: true, detail: '200 OK' }]);
+  });
+
+  it('persists smoke results on a smoke-failed rollback', async () => {
+    const { store, site, change, manager } = setup(scriptedPushRunner({ smokeFails: true }));
+    const seen: PushWireEvent[] = [];
+    manager.subscribe(site.id, (e) => seen.push(e));
+    manager.start(site, change, {});
+    await until(() => seen.some((e) => e.type === 'push_done'));
+
+    const after = store.changeById(change.id)!;
+    expect(after.status).toBe('rolled_back');
+    expect(after.smokeResult).toEqual([{ label: 'home', ok: false, detail: '500 · unexpected body' }]);
+  });
+
   it('throws busy when a push is already running for the site', () => {
     const { site, change, manager } = setup(scriptedPushRunner());
     manager.start(site, change, {});
