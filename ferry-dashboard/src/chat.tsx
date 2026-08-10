@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { useLocation } from 'react-router-dom';
 import { agentHistory, agentNewSession, agentSend, ApiError, type AgentWireEvent } from './api';
+import { InlineChangeCard } from './change-parts';
 
 type ConnState = 'connecting' | 'live' | 'lost';
 
@@ -11,7 +12,8 @@ type Block =
   | { kind: 'agent'; key: string; text: string }
   | { kind: 'tools'; key: string; rows: ToolRow[] }
   | { kind: 'status'; key: string; text: string; isError?: boolean }
-  | { kind: 'turn_end'; key: string; text: string };
+  | { kind: 'turn_end'; key: string; text: string }
+  | { kind: 'change_card'; key: string; changeSeq: number; title: string };
 
 const ERROR_SUBTYPES = new Set(['error_max_turns', 'error_max_budget_usd', 'error_during_execution']);
 
@@ -76,6 +78,14 @@ function buildBlocks(events: AgentWireEvent[]): Block[] {
         }
         break;
       }
+      case 'change_card':
+        flushTools();
+        blocks.push({
+          kind: 'change_card', key,
+          changeSeq: Number(event.payload.seq ?? 0), // the CHANGE seq, not the wire seq
+          title: String(event.payload.title ?? ''),
+        });
+        break;
       default:
         break;
     }
@@ -198,6 +208,9 @@ export function AgentChat({ siteId }: { siteId: number }) {
                 ))}
               </div>
             );
+          }
+          if (block.kind === 'change_card') {
+            return <InlineChangeCard key={block.key} siteId={siteId} changeSeq={block.changeSeq} title={block.title} />;
           }
           if (block.kind === 'status') {
             return (

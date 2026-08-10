@@ -1,4 +1,6 @@
-import type { ChangeStatus, DbOp } from './api';
+import { Link, useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { getChange, pushChange, ApiError, type Change, type ChangeStatus, type DbOp } from './api';
 
 export function changeRef(seq: number): string {
   return `CHANGE-${String(seq).padStart(4, '0')}`;
@@ -124,6 +126,78 @@ export function ConfirmDialog({ title, body, confirmLabel, danger, onConfirm, on
           <button type="button" className={danger ? 'btn btn--danger' : 'btn btn--push'} onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+export function InlineChangeCard({ siteId, changeSeq, title }: { siteId: number; changeSeq: number; title: string }) {
+  const [change, setChange] = useState<Change | null>(null);
+  const [pushError, setPushError] = useState('');
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    void getChange(siteId, changeSeq).then(setChange).catch(() => undefined);
+  }, [siteId, changeSeq]);
+
+  async function push() {
+    try {
+      await pushChange(siteId, changeSeq);
+      navigate(`/sites/${siteId}/changes/${changeSeq}`); // watch the six steps on the change page
+    } catch (err) {
+      setPushError(err instanceof ApiError ? err.message : 'Could not start the push.');
+    }
+  }
+
+  const files = change?.files ?? [];
+  const optionOps = (change?.ops ?? []).filter((o) => o.kind === 'option_set' || o.kind === 'option_delete');
+
+  return (
+    <div className="ccard">
+      <div className="ccard__head">
+        <span className="state-icon state-icon--ok">✓</span>
+        <span className="ccard__title">{change?.title ?? title}</span>
+        <span className="ccard__ref mono">{changeRef(changeSeq)} · {change ? change.status : '…'}</span>
+      </div>
+      {change && (
+        <>
+          <div className="ccard__summary">“{change.summary}”</div>
+          <div className="ccard__row">
+            <span className="ccard__row-label">▸ {files.length} file{files.length === 1 ? '' : 's'} changed</span>
+            {/* honest files list: everything the push would apply, including carried-over work */}
+            <span className="ccard__row-detail mono">{files.map((f) => f.path.split('/').pop()).join(' · ')}</span>
+          </div>
+          {change.ops.length > 0 && (
+            <div className="ccard__row">
+              <span className="ccard__row-label">▸ {change.ops.length} {change.ops.length === optionOps.length ? `setting${change.ops.length === 1 ? '' : 's'}` : `DB operation${change.ops.length === 1 ? '' : 's'}`}</span>
+              {optionOps.length === 1 && optionOps[0].kind === 'option_set' && (
+                <span className="ccard__row-detail mono">
+                  {optionOps[0].name} <span className="ccard__old">{optionOps[0].old}</span> → <span className="ccard__new">{optionOps[0].new}</span>
+                </span>
+              )}
+            </div>
+          )}
+          <div className="ccard__row">
+            <span className="ccard__row-label">✓ Drift check</span>
+            <span className="ccard__row-detail">verified at push time inside the write transaction</span>
+          </div>
+          {change.smoke.length > 0 && (
+            <div className="ccard__row">
+              <span className="ccard__row-label mono">⚑</span>
+              <span className="ccard__row-detail">
+                After push I test: <strong>{change.smoke.map((s) => s.label).join(' · ')}</strong>. If the smoke test fails → automatic rollback.
+              </span>
+            </div>
+          )}
+          {pushError !== '' && <div className="ccard__row"><span className="ccard__row-detail" style={{ color: 'var(--red)' }}>{pushError}</span></div>}
+          <div className="ccard__footer">
+            <span className="ccard__note mono">nothing goes to production automatically</span>
+            <Link to={`/sites/${siteId}/changes/${changeSeq}`} role="link" className="btn btn--outline btn--sm">View diff</Link>
+            {change.status === 'draft' && (
+              <button type="button" className="btn btn--push btn--sm" onClick={push}>Push to production</button>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
