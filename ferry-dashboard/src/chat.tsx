@@ -9,7 +9,7 @@ type Block =
   | { kind: 'user'; key: string; text: string }
   | { kind: 'agent'; key: string; text: string }
   | { kind: 'tools'; key: string; rows: ToolRow[] }
-  | { kind: 'status'; key: string; text: string }
+  | { kind: 'status'; key: string; text: string; isError?: boolean }
   | { kind: 'turn_end'; key: string; text: string };
 
 const ERROR_SUBTYPES = new Set(['error_max_turns', 'error_max_budget_usd', 'error_during_execution']);
@@ -57,7 +57,11 @@ function buildBlocks(events: AgentWireEvent[]): Block[] {
       }
       case 'status':
         flushTools();
-        blocks.push({ kind: 'status', key, text: String(event.payload.detail ?? event.payload.state ?? '') });
+        blocks.push({
+          kind: 'status', key,
+          text: String(event.payload.detail ?? event.payload.state ?? ''),
+          isError: event.payload.state === 'error',
+        });
         break;
       case 'turn_end': {
         const subtype = String(event.payload.subtype ?? '');
@@ -194,7 +198,11 @@ export function AgentChat({ siteId }: { siteId: number }) {
             );
           }
           if (block.kind === 'status') {
-            return <div key={block.key} className="chat__status mono">{block.text}</div>;
+            return (
+              <div key={block.key} className={block.isError ? 'chat__status chat__status--error mono' : 'chat__status mono'}>
+                {block.text}
+              </div>
+            );
           }
           return <div key={block.key} className="chat__status chat__status--error mono">{block.text}</div>;
         })}

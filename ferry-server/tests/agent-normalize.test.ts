@@ -112,4 +112,20 @@ describe('normalizeSdkMessage', () => {
     expect(events[0]).toMatchObject({ type: 'tool_use' });
     expect((events[0] as { input: string }).input).toHaveLength(TOOL_INPUT_MAX);
   });
+
+  it('maps an API-error assistant message to runner_error, not agent_text', () => {
+    const events = normalizeSdkMessage({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'API Error: 401 {"type":"error","error":{"type":"authentication_error"}}' }] },
+    });
+    expect(events).toEqual([{ type: 'runner_error', message: 'API Error: 401 {"type":"error","error":{"type":"authentication_error"}}' }]);
+  });
+
+  it('still maps ordinary assistant text to agent_text', () => {
+    const events = normalizeSdkMessage({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'API errors are worth retrying.' }] },
+    });
+    expect(events).toEqual([{ type: 'agent_text', text: 'API errors are worth retrying.' }]);
+  });
 });

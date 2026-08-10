@@ -36,7 +36,13 @@ export function normalizeSdkMessage(msg: unknown): RunnerEvent[] {
     if (Array.isArray(content)) {
       for (const block of content) {
         if (block?.type === 'text' && typeof block.text === 'string' && block.text !== '') {
-          out.push({ type: 'agent_text', text: block.text });
+          // The SDK surfaces API failures (401s etc.) as a synthetic assistant message rather
+          // than throwing — without this branch they render as ordinary agent prose (issue #9).
+          if (/^API Error\b/.test(block.text)) {
+            out.push({ type: 'runner_error', message: block.text });
+          } else {
+            out.push({ type: 'agent_text', text: block.text });
+          }
         } else if (block?.type === 'tool_use') {
           out.push({
             type: 'tool_use', toolUseId: String(block.id ?? ''), name: String(block.name ?? ''),
