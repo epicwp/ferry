@@ -1,6 +1,7 @@
 import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import { resetAgentBranchIfIdle } from './agent/branch.js';
 import { AgentManager } from './agent/manager.js';
 import type { AgentRunner } from './agent/types.js';
 import type { Engine } from './engine.js';
@@ -84,7 +85,16 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   authRoutes(app, deps);
   siteRoutes(app, deps);
   if (deps.engine) {
-    const sync = new SyncManager(deps.store, deps.engine);
+    const sync = new SyncManager(deps.store, deps.engine, {
+      afterReady: deps.agent
+        ? async (site) => {
+            const active = deps.store
+              .changesFor(site.id)
+              .some((c) => c.status === 'draft' || c.status === 'conflict' || c.status === 'pushing');
+            if (!active) await resetAgentBranchIfIdle(deps.agent!.cloneDir(site.slug));
+          }
+        : undefined,
+    });
     const agents = deps.agent
       ? new AgentManager(deps.store, deps.agent.runner, {
           cloneDir: deps.agent.cloneDir,

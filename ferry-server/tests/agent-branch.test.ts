@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ensureAgentBranch, hasUncommittedAgentWork } from '../src/agent/branch.js';
+import { ensureAgentBranch, hasUncommittedAgentWork, resetAgentBranchIfIdle } from '../src/agent/branch.js';
 
 function git(dir: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
@@ -69,5 +69,34 @@ describe('hasUncommittedAgentWork', () => {
 
   it('tolerates a missing/non-git clone dir', async () => {
     expect(await hasUncommittedAgentWork('/no/such/ferry-clone-dir')).toBe(false);
+  });
+});
+
+describe('resetAgentBranchIfIdle', () => {
+  it('resets agent/work to production when the worktree is clean', async () => {
+    const dir = makeClone();
+    await ensureAgentBranch(dir);
+    writeFileSync(join(dir, 'fix.php'), '<?php // fix');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-m', 'agent fix');
+    expect(await resetAgentBranchIfIdle(dir)).toBe(true);
+    expect(git(dir, 'rev-parse', 'agent/work')).toBe(git(dir, 'rev-parse', 'production'));
+  });
+
+  it('does not reset when the worktree is dirty', async () => {
+    const dir = makeClone();
+    await ensureAgentBranch(dir);
+    writeFileSync(join(dir, 'fix.php'), '<?php // fix');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-m', 'agent fix');
+    writeFileSync(join(dir, 'fix.php'), '<?php // wip');
+    expect(await resetAgentBranchIfIdle(dir)).toBe(false);
+    expect(git(dir, 'rev-parse', 'agent/work')).not.toBe(git(dir, 'rev-parse', 'production'));
+  });
+
+  it('is a no-op without an agent/work branch and on a non-git dir', async () => {
+    const bareProductionOnlyDir = makeClone();
+    expect(await resetAgentBranchIfIdle(bareProductionOnlyDir)).toBe(false);
+    expect(await resetAgentBranchIfIdle('/nonexistent')).toBe(false);
   });
 });

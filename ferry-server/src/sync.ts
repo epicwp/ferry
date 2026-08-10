@@ -27,6 +27,7 @@ export class SyncManager {
   constructor(
     private readonly store: Store,
     private readonly engine: Engine,
+    private readonly opts: { afterReady?: (site: Site) => Promise<void> } = {},
   ) {}
 
   isRunning(siteId: number): boolean {
@@ -85,6 +86,7 @@ export class SyncManager {
       this.store.setStatus(site.id, 'ready', { lastError: null, lastSyncAt: now, verifiedAt: now });
       this.active.delete(site.id);
       this.emit(site.id, { status: 'ready', cloneUrl: result.url, verifiedAt: now, error: null });
+      void this.opts.afterReady?.(site)?.catch((err) => console.error('afterReady hook failed:', err));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.store.setStatus(site.id, 'error', { lastError: message });
