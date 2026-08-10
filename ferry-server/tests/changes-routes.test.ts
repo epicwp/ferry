@@ -112,6 +112,42 @@ describe('changes routes', () => {
     expect(res.statusCode).toBe(409);
   });
 
+  it('force-pushes a conflicted change', async () => {
+    const base = scriptedPushRunner();
+    let sawForce: boolean | undefined;
+    const runner = {
+      ...base,
+      push: (slug: string, spec: Parameters<typeof base.push>[1], opts: Parameters<typeof base.push>[2]) => {
+        sawForce = opts.force;
+        return base.push(slug, spec, opts);
+      },
+    };
+    const { app, store } = makeApp({ engine: stubEngine(), push: { runner } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const change = draftChange(store, site.id);
+    store.setChangeStatus(change.id, 'conflict', { conflict: [{ key: 'wp_options.blogname', expected: 'A', found: 'C' }] });
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/sites/${site.id}/changes/${change.seq}/push`, headers: { cookie }, payload: { force: true },
+    });
+    expect(res.statusCode).toBe(202);
+    await until(() => store.changeBySeq(site.id, change.seq)!.status !== 'pushing');
+    expect(sawForce).toBe(true);
+  });
+
+  it('refuses a plain push of a conflicted change', async () => {
+    const { app, store } = makeApp({ engine: stubEngine(), push: { runner: scriptedPushRunner() } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const change = draftChange(store, site.id);
+    store.setChangeStatus(change.id, 'conflict', { conflict: [{ key: 'wp_options.blogname', expected: 'A', found: 'C' }] });
+
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${change.seq}/push`, headers: { cookie } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'Only a draft change can be pushed.' });
+  });
+
   it('mutually excludes push against sync and agent in the other direction too', async () => {
     const engine = stubEngine({ pull: () => new Promise(() => {}), verifyClone: async () => ({ ok: true }) });
     const { app, store } = makeApp({ engine, agent: agentDeps(scriptedRunner()), push: { runner: scriptedPushRunner() } });

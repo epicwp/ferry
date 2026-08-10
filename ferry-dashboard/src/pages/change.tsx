@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  api, ApiError, discardChange, driftPreview, getChange, pushChange, rollbackChange,
+  api, ApiError, discardChange, driftPreview, getChange, pushChange, retryChange, rollbackChange,
   type Change, type DriftPreview, type PushStep, type PushWireEvent, type Site, type StepEvent,
 } from '../api';
 import { changeRef, ConfirmDialog, DiffView, OpsTable, riskOf, StatusPill, timeAgo } from '../change-parts';
@@ -100,7 +100,9 @@ export function ChangePage() {
           <PushedView change={change} siteId={siteId} onReload={reload} actionError={actionError} setActionError={setActionError} />
         )}
         {change.status === 'rolled_back' && <RolledBackView change={change} siteId={siteId} />}
-        {/* Task 11 adds the conflict view */}
+        {change.status === 'conflict' && (
+          <ConflictView change={change} siteId={siteId} onReload={reload} actionError={actionError} setActionError={setActionError} />
+        )}
       </div>
     </div>
   );
@@ -415,6 +417,91 @@ function RolledBackView({ change, siteId }: { change: Change; siteId: number }) 
           Let the agent adjust it
         </Link>
       </div>
+    </div>
+  );
+}
+
+function ConflictView({ change, siteId, onReload, actionError, setActionError }: {
+  change: Change; siteId: number; onReload: () => Promise<void>;
+  actionError: string; setActionError: (e: string) => void;
+}) {
+  const [forceOpen, setForceOpen] = useState(false);
+  const navigate = useNavigate();
+
+  async function retry() {
+    try {
+      await retryChange(siteId, change.seq);
+      navigate(`/sites/${siteId}`); // watch the agent pick the conflict up in chat
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Could not start the retry.');
+    }
+  }
+
+  async function force() {
+    try {
+      await pushChange(siteId, change.seq, true);
+      await onReload();
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Could not force the push.');
+    }
+  }
+
+  return (
+    <div className="change-card change-card--conflict">
+      <div className="change-section">
+        <div className="change-head">
+          <span className="state-icon state-icon--warn">!</span>
+          <span className="change-head__title">Push stopped — production changed in the meantime</span>
+        </div>
+        <p className="card__sub"><strong>Nothing</strong> was changed on your site. The check and the change happen in one indivisible step; because the check failed, the entire transaction was rolled back.</p>
+      </div>
+      <div className="change-section">
+        <div className="section-label">What no longer matched</div>
+        <div className="conflict-table">
+          <div className="conflict-table__row conflict-table__row--head mono">
+            <span>key from read set</span><span>expected</span><span>now on prod</span>
+          </div>
+          {(change.conflict ?? []).map((c, i) => (
+            <div key={i} className="conflict-table__row conflict-table__row--data mono">
+              <span>{c.key}</span>
+              <span className="conflict-expected">{c.expected || '—'}</span>
+              <span className="conflict-found">{c.found}</span>
+            </div>
+          ))}
+        </div>
+        <div className="ops-footnote">Production changed after this fix was drafted, so the fix’s assumptions no longer hold.</div>
+      </div>
+      <div className="change-section">
+        <div className="section-label">How to proceed</div>
+        <div className="conflict-option conflict-option--recommended">
+          <div className="conflict-option__text">
+            <span className="conflict-option__title">Let the agent take another look</span>
+            <span className="conflict-option__sub">Ferry fetches the changed rows and the agent adjusts the fix. Recommended.</span>
+          </div>
+          <button type="button" className="btn btn--primary btn--sm" onClick={retry}>Retry</button>
+        </div>
+        <div className="conflict-option conflict-option--danger">
+          <div className="conflict-option__text">
+            <span className="conflict-option__title">Force overwrite</span>
+            <span className="conflict-option__sub">Ignore the new value on production. Only if you know what you’re doing.</span>
+          </div>
+          <button type="button" className="btn btn--danger-outline btn--sm" onClick={() => setForceOpen(true)}>Force</button>
+        </div>
+      </div>
+      {actionError !== '' && <div className="change-section"><div className="form-error">{actionError}</div></div>}
+      <div className="change-actions">
+        <span className="change-actions__note">no backup needed · no rollback needed · production untouched</span>
+      </div>
+      {forceOpen && (
+        <ConfirmDialog
+          title="Force overwrite?"
+          body="This ignores what changed on production and applies the fix anyway. The current production values will be overwritten. The apply itself stays transactional."
+          confirmLabel="Force push"
+          danger
+          onConfirm={() => { setForceOpen(false); void force(); }}
+          onCancel={() => setForceOpen(false)}
+        />
+      )}
     </div>
   );
 }

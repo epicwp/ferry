@@ -145,3 +145,52 @@ test('a pushed change shows smoke results and rolls back to screen 12', async ({
   await expect(page.getByRole('link', { name: 'Back to chat' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Let the agent adjust it' })).toBeVisible();
 });
+
+test('a conflicted change shows the read-set table; Force re-pushes after a confirm', async ({ page }) => {
+  await signUp(page);
+  const siteId = await createSite(page, 'Conflict view', `https://cview-${Date.now()}.example.com`);
+  const { seq } = await seedChange(page, siteId, { status: 'conflict' });
+  await page.goto(`/sites/${siteId}/changes/${seq}`);
+
+  await expect(page.getByText('Push stopped — production changed in the meantime')).toBeVisible();
+  await expect(page.getByText('Nothing was changed on your site.', { exact: false })).toBeVisible();
+  await expect(page.locator('.conflict-table__row--data')).toHaveCount(1);
+  await expect(page.getByText('now on prod')).toBeVisible();
+  // deferred option is NOT rendered (design decision 3)
+  await expect(page.getByText('Push the code only')).toHaveCount(0);
+  await expect(page.getByText('no backup needed · no rollback needed · production untouched')).toBeVisible();
+
+  // Retry on a non-ready site surfaces the guard honestly
+  await page.getByRole('button', { name: 'Retry' }).click();
+  await expect(page.locator('.form-error')).toHaveText('Sync the site first.');
+
+  // Force → confirm dialog → scripted happy push → pushed
+  await page.getByRole('button', { name: 'Force' }).click();
+  await expect(page.getByText('Force overwrite?')).toBeVisible();
+  await page.getByRole('button', { name: 'Force push' }).click();
+  await expect(page.locator('.status-pill--pushed')).toBeVisible({ timeout: 15_000 });
+});
+
+test('a push that hits drift lands on the conflict card', async ({ page }) => {
+  await signUp(page);
+  const siteId = await createSite(page, 'Conflict push', `https://conflict-${Date.now()}.example.com`);
+  const { seq } = await seedChange(page, siteId);
+  await page.goto(`/sites/${siteId}/changes/${seq}`);
+  await page.getByRole('button', { name: 'Push to production' }).click();
+  await expect(page.getByText('Push stopped — production changed in the meantime')).toBeVisible({ timeout: 15_000 });
+});
+
+test('a higher-risk draft routes Push through the confirm dialog', async ({ page }) => {
+  await signUp(page);
+  const siteId = await createSite(page, 'Higher risk shop', `https://higherrisk-${Date.now()}.example.com`);
+  const { seq } = await seedChange(page, siteId, {
+    fields: { ops: [{ kind: 'row_update', table: 'wp_wc_custom_rates', pkCol: 'id', pk: 3, old: { rate: '19' }, new: { rate: '21' } }] },
+  });
+  await page.goto(`/sites/${siteId}/changes/${seq}`);
+
+  await expect(page.locator('.risk-chip')).toHaveText('higher risk');
+  await page.getByRole('button', { name: 'Push to production' }).click();
+  await expect(page.getByText('Push higher-risk operations?')).toBeVisible();
+  await page.locator('.modal').getByRole('button', { name: 'Push to production' }).click();
+  await expect(page.locator('.status-pill--pushing, .status-pill--pushed')).toBeVisible({ timeout: 15_000 });
+});

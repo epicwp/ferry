@@ -48,8 +48,10 @@ export function changesRoutes(
     if (agents?.isActive(site.id)) {
       return reply.code(409).send({ error: 'The agent is working on this site — finish or start a new session first.' });
     }
-    if (change.status !== 'draft') return reply.code(409).send({ error: 'Only a draft change can be pushed.' });
     const force = !!(request.body as { force?: boolean } | undefined)?.force;
+    // Screen 11's Force action pushes a conflicted change; anything else stays draft-only.
+    const pushable = change.status === 'draft' || (change.status === 'conflict' && force);
+    if (!pushable) return reply.code(409).send({ error: 'Only a draft change can be pushed.' });
     try {
       push.start(site, change, { force });
     } catch (err) {
