@@ -163,7 +163,14 @@ final class DbOps
             }
             // 'file_hash' intentionally not handled here.
         }
-        return $entries;
+        // An op and its matching precondition target the same key with the same expected
+        // value - keep one entry so a single drifted value reports a single conflict.
+        // Same key with a DIFFERENT expected stays duplicated on purpose: both checks ran.
+        $unique = [];
+        foreach ($entries as $entry) {
+            $unique[$entry['key'] . '|' . serialize($entry['expected'])] = $entry;
+        }
+        return array_values($unique);
     }
 
     private static function op_entry(array $op, string $prefix): array

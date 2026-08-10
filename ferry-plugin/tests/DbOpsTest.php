@@ -129,6 +129,29 @@ final class DbOpsTest extends TestCase
         $this->assertCount(5, $wpdb->queries);
     }
 
+    public function test_op_with_matching_precondition_reports_one_conflict_not_two(): void
+    {
+        // Live finding (Plan 5a acceptance): the op's old-value check and its matching
+        // precondition produced two identical read-set entries, so one drifted option
+        // reported the same conflict twice.
+        $ops = [
+            ['kind' => 'option_set', 'name' => 'ferry_a', 'old' => 'V1', 'new' => 'V2'],
+        ];
+        $preconditions = [
+            ['type' => 'option', 'name' => 'ferry_a', 'expected' => 'V1'],
+        ];
+        $wpdb = new FakeWpdb([
+            ['option_value' => 'drifted'], // one read for the single deduped entry
+        ]);
+
+        $result = DbOps::apply_in_transaction($wpdb, $ops, $preconditions, 'wp_', false);
+
+        $this->assertFalse($result['committed']);
+        $this->assertSame([
+            ['key' => 'option:ferry_a', 'expected' => 'V1', 'found' => 'drifted'],
+        ], $result['conflicts']);
+    }
+
     // ---- mismatch -> rollback, all conflicts reported ----
 
     public function test_mismatch_among_three_keys_rolls_back_and_reports_all_conflicts(): void
