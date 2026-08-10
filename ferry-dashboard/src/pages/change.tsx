@@ -1,10 +1,50 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   api, ApiError, discardChange, driftPreview, getChange, pushChange,
-  type Change, type DriftPreview, type Site,
+  type Change, type DriftPreview, type PushStep, type PushWireEvent, type Site, type StepEvent,
 } from '../api';
 import { changeRef, ConfirmDialog, DiffView, OpsTable, riskOf, StatusPill, timeAgo } from '../change-parts';
+
+const PUSH_STEPS: { id: PushStep; label: string; sub: (c: Change) => string }[] = [
+  { id: 'staging', label: 'Diffs to staging directory', sub: (c) => `.ferry-staging/ · ${c.files.length} file${c.files.length === 1 ? '' : 's'}` },
+  { id: 'hashes', label: 'Hashes verified', sub: () => '' },
+  { id: 'drift', label: 'Drift check — compare-and-swap', sub: (c) => `file hashes + read set of ${c.ops.length + c.preconditions.length} row${c.ops.length + c.preconditions.length === 1 ? '' : 's'}` },
+  { id: 'swap', label: 'Atomic rename swap with backup', sub: (c) => `backup → .ferry-backup/${(c.backupTxid ?? '').slice(0, 7)}` },
+  { id: 'journal', label: 'Replay DB journal in a single transaction', sub: () => 'SELECT … FOR UPDATE → verify → apply → commit' },
+  { id: 'smoke', label: 'Smoke test', sub: (c) => c.smoke.map((s) => s.label).join(' · ') },
+];
+
+interface StepState { status: 'pending' | 'active' | 'done' | 'fail'; durationMs?: number; startedAt?: number }
+interface ReceivedEvent { event: PushWireEvent; at: number }
+
+/** State-keyed reducer: the real runner emits `drift start` twice (crash-classification marker
+ *  at push.ts:124 + the regular re-emission) — keying by step id makes duplicates no-ops
+ *  (issue #9: double drift:start SSE emission). */
+function reduceSteps(received: ReceivedEvent[]): Record<PushStep, StepState> {
+  const steps = Object.fromEntries(PUSH_STEPS.map((s) => [s.id, { status: 'pending' } as StepState])) as Record<PushStep, StepState>;
+  for (const { event, at } of received) {
+    if (event.type !== 'push_step') continue;
+    const p = event.payload as StepEvent;
+    const s = steps[p.step];
+    if (!s) continue;
+    if (p.status === 'start' && s.status === 'pending') { s.status = 'active'; s.startedAt = at; }
+    if (p.status === 'ok') { s.status = 'done'; s.durationMs = p.durationMs ?? (s.startedAt !== undefined ? at - s.startedAt : undefined); }
+    if (p.status === 'fail') { s.status = 'fail'; s.durationMs = p.durationMs; }
+  }
+  return steps;
+}
+
+function logLines(received: ReceivedEvent[]): { at: number; text: string; ok: boolean }[] {
+  const lines: { at: number; text: string; ok: boolean }[] = [];
+  for (const { event, at } of received) {
+    if (event.type !== 'push_step') continue;
+    const p = event.payload as StepEvent;
+    if (p.status === 'start' && lines.some((l) => l.text.startsWith(`${p.step}:`) )) continue; // duplicate marker
+    lines.push({ at, text: `${p.step}: ${p.status}${p.detail ? ` — ${p.detail}` : ''}`, ok: p.status === 'ok' });
+  }
+  return lines;
+}
 
 export function ChangePage() {
   const { id, seq } = useParams();
@@ -55,9 +95,83 @@ export function ChangePage() {
         {change.status === 'draft' && (
           <DraftView change={change} siteId={siteId} onReload={reload} actionError={actionError} setActionError={setActionError} navigate={navigate} />
         )}
-        {change.status === 'pushing' && <div className="change-card"><div className="change-section">Pushing…</div></div>}
-        {/* Tasks 9–11 replace the placeholder above and add pushed / conflict / rolled_back views */}
+        {change.status === 'pushing' && <PushingView change={change} siteId={siteId} onDone={reload} />}
+        {/* Tasks 10–11 add pushed / conflict / rolled_back views */}
       </div>
+    </div>
+  );
+}
+
+function PushingView({ change, siteId, onDone }: { change: Change; siteId: number; onDone: () => Promise<void> }) {
+  const [received, setReceived] = useState<ReceivedEvent[]>([]);
+  const [startedAt] = useState(() => Date.now());
+  const [elapsed, setElapsed] = useState(0);
+  const esRef = useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    const t = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 500);
+    return () => clearInterval(t);
+  }, [startedAt]);
+
+  useEffect(() => {
+    esRef.current?.close();
+    const es = new EventSource(`/api/sites/${siteId}/push/events?after=0`);
+    esRef.current = es;
+    es.onmessage = (ev) => {
+      const event = JSON.parse(ev.data) as PushWireEvent;
+      setReceived((prev) => (prev.some((r) => r.event.seq === event.seq) ? prev : [...prev, { event, at: Date.now() }]));
+      if (event.type === 'push_done') void onDone();
+    };
+    // Poll fallback: boot recovery emits no SSE, and a lost stream must never leave an unknown
+    // end state — the change row is the truth (spec §Error handling: never an unknown end state).
+    const poll = setInterval(() => void onDone(), 3_000);
+    return () => { es.close(); clearInterval(poll); };
+  }, [siteId, onDone]);
+
+  const steps = reduceSteps(received);
+  const doneCount = PUSH_STEPS.filter((s) => steps[s.id].status === 'done').length;
+  const lines = logLines(received);
+  const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+  const ss = String(elapsed % 60).padStart(2, '0');
+
+  return (
+    <div className="push-progress">
+      <div className="change-card">
+        <div className="change-section">
+          <div className="change-head">
+            <span className="change-head__title">Pushing to production</span>
+            <span className="elapsed-pill mono">pushing · {mm}:{ss}</span>
+          </div>
+          <p className="card__sub">Nothing is final until the last step succeeds. If anything fails, everything is rolled back.</p>
+          <div className="progress"><div className="progress__bar" style={{ width: `${(doneCount / 6) * 100}%` }} /></div>
+          <div className="phase-list">
+            {PUSH_STEPS.map((meta) => {
+              const s = steps[meta.id];
+              const cls = s.status === 'done' ? 'phase phase--done' : s.status === 'active' ? 'phase phase--active' : s.status === 'fail' ? 'phase phase--fail' : 'phase phase--pending';
+              return (
+                <div key={meta.id} className={cls}>
+                  <span className="phase__dot">{s.status === 'done' ? '✓' : s.status === 'fail' ? '!' : ''}</span>
+                  <span className="phase__text">
+                    <span className="phase__label">{meta.label}</span>
+                    {meta.sub(change) !== '' && <span className="phase__sub mono">{meta.sub(change)}</span>}
+                  </span>
+                  {s.durationMs !== undefined && <span className="phase__timing mono">{(s.durationMs / 1000).toFixed(1)}s</span>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+      {lines.length > 0 && (
+        <div className="push-log terminal">
+          {lines.map((l, i) => (
+            <div key={i}>
+              <span className="terminal__prompt">{new Date(l.at).toLocaleTimeString()}</span>{' '}
+              <span className={l.ok ? 'terminal__ok' : undefined}>{l.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

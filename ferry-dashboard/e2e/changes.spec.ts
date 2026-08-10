@@ -92,3 +92,17 @@ test('the drift preview reports a drifted production honestly', async ({ page })
   await page.goto(`/sites/${siteId}/changes/${seq}`);
   await expect(page.locator('.drift-strip__state--bad')).toContainText('production drifted');
 });
+
+test('pushing a draft walks the six steps once each and lands on the pushed card', async ({ page }) => {
+  await signUp(page);
+  const siteId = await createSite(page, 'Push shop', `https://push-${Date.now()}.example.com`);
+  const { seq } = await seedChange(page, siteId);
+  await page.goto(`/sites/${siteId}/changes/${seq}`);
+  await page.getByRole('button', { name: 'Push to production' }).click();
+
+  await expect(page.getByText('Nothing is final until the last step succeeds.', { exact: false })).toBeVisible();
+  await expect(page.locator('.phase')).toHaveCount(6); // exactly one row per step — duplicate drift start deduped
+  await expect(page.locator('.push-log')).toBeVisible();
+  // scripted runner finishes in ~120ms; the page transitions to the pushed state
+  await expect(page.locator('.status-pill--pushed')).toBeVisible({ timeout: 15_000 });
+});
