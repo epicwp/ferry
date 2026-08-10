@@ -54,3 +54,41 @@ test('an empty changes tab shows the empty state', async ({ page }) => {
   await page.goto(`/sites/${siteId}/changes`);
   await expect(page.getByText('No changes yet')).toBeVisible();
 });
+
+test('a draft change page shows the full card and can be discarded', async ({ page }) => {
+  await signUp(page);
+  const siteId = await createSite(page, 'Draft shop', `https://draft-${Date.now()}.example.com`);
+  const { seq } = await seedChange(page, siteId);
+  await page.goto(`/sites/${siteId}/changes/${seq}`);
+
+  await expect(page.locator('.breadcrumb__here')).toHaveText('CHANGE-0001');
+  await expect(page.locator('.change-head__title')).toHaveText('VAT calculation fixed');
+  await expect(page.locator('.change-summary')).toContainText('I have fixed both');
+  // diff: two file blocks, add/del coloring
+  await expect(page.locator('.diff-file')).toHaveCount(2);
+  await expect(page.locator('.diff-line--add').first()).toBeVisible();
+  await expect(page.locator('.diff-line--del').first()).toBeVisible();
+  await expect(page.getByText('2 files changed')).toBeVisible();
+  // DB journal: risk chip + old/new
+  await expect(page.locator('.risk-chip')).toHaveText('low risk');
+  await expect(page.locator('.ops-table')).toContainText('woocommerce_tax_display_cart');
+  await expect(page.locator('.ops-old')).toHaveText('incl');
+  await expect(page.locator('.ops-new')).toHaveText('excl');
+  // preconditions + smoke plan + drift preview (scripted hashes match)
+  await expect(page.locator('.precondition')).toHaveCount(1);
+  await expect(page.locator('.drift-strip__state--ok')).toHaveText('production unchanged');
+  await expect(page.getByText('if one fails → automatic rollback')).toBeVisible();
+  // actions
+  await expect(page.getByRole('button', { name: 'Push to production' })).toBeVisible();
+  await page.getByRole('button', { name: 'Discard' }).click();
+  await expect(page).toHaveURL(`/sites/${siteId}/changes`);
+  expect(await page.locator('a[href*="ddev.site"]').count()).toBe(0);
+});
+
+test('the drift preview reports a drifted production honestly', async ({ page }) => {
+  await signUp(page);
+  const siteId = await createSite(page, 'Drifted preview', `https://driftedpreview-${Date.now()}.example.com`);
+  const { seq } = await seedChange(page, siteId);
+  await page.goto(`/sites/${siteId}/changes/${seq}`);
+  await expect(page.locator('.drift-strip__state--bad')).toContainText('production drifted');
+});
