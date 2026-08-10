@@ -64,3 +64,54 @@ export const agentNewSession = (siteId: number) =>
   call<{ created: boolean }>('POST', `/api/sites/${siteId}/agent/sessions`);
 export const agentContext = (siteId: number) =>
   call<AgentContext>('GET', `/api/sites/${siteId}/agent/context`);
+
+export type ChangeStatus = 'draft' | 'pushing' | 'pushed' | 'conflict' | 'rolled_back' | 'discarded';
+
+export type DbOp =
+  | { kind: 'option_set'; name: string; old: string | null; new: string }
+  | { kind: 'option_delete'; name: string; old: string | null }
+  | { kind: 'postmeta_set'; postId: number; key: string; old: string | null; new: string }
+  | { kind: 'postmeta_delete'; postId: number; key: string; old: string | null }
+  | { kind: 'row_update'; table: string; pkCol: string; pk: number; old: Record<string, string | null>; new: Record<string, string | null> }
+  | { kind: 'row_insert'; table: string; pkCol: string; pk: number; new: Record<string, string | null> }
+  | { kind: 'row_delete'; table: string; pkCol: string; pk: number; old: Record<string, string | null> };
+
+export type Precondition =
+  | { type: 'option'; name: string; expected: string | null }
+  | { type: 'file_hash'; path: string; expected: string }
+  | { type: 'row'; table: string; pkCol: string; pk: number; column: string; expected: string | null };
+
+export interface SmokeCheck { label: string; path: string; expectStatus: number; expectText?: string }
+export interface SmokeResult { label: string; ok: boolean; detail?: string }
+export interface ChangeFile { path: string; newHash: string | null; oldHash: string | null }
+export interface Conflict { key: string; expected: string; found: string }
+
+/** Mirror of ferry-server's Change row (store.ts) — same duplication convention as SyncState. */
+export interface Change {
+  id: number; siteId: number; seq: number; status: ChangeStatus;
+  title: string; summary: string; branch: string; baseSha: string; headSha: string;
+  diffText: string; files: ChangeFile[]; ops: DbOp[]; preconditions: Precondition[]; smoke: SmokeCheck[];
+  backupTxid: string | null; prodRef: string | null; conflict: Conflict[] | null;
+  smokeResult: SmokeResult[] | null;
+  createdAt: string; pushedAt: string | null; rolledBackAt: string | null;
+}
+
+export type PushStep = 'staging' | 'hashes' | 'drift' | 'swap' | 'journal' | 'smoke';
+export interface StepEvent { step: PushStep; status: 'start' | 'ok' | 'fail'; detail?: string; durationMs?: number }
+export interface PushWireEvent { seq: number; type: 'push_step' | 'push_done'; payload: unknown }
+export interface DriftPreview { checked: number; mismatches: string[] }
+
+export const listChanges = (siteId: number, status?: ChangeStatus) =>
+  call<{ changes: Change[] }>('GET', `/api/sites/${siteId}/changes${status ? `?status=${status}` : ''}`);
+export const getChange = (siteId: number, seq: number) =>
+  call<Change>('GET', `/api/sites/${siteId}/changes/${seq}`);
+export const pushChange = (siteId: number, seq: number, force = false) =>
+  call<{ started: boolean }>('POST', `/api/sites/${siteId}/changes/${seq}/push`, { force });
+export const rollbackChange = (siteId: number, seq: number) =>
+  call<{ rolledBack: boolean }>('POST', `/api/sites/${siteId}/changes/${seq}/rollback`);
+export const discardChange = (siteId: number, seq: number) =>
+  call<{ discarded: boolean }>('POST', `/api/sites/${siteId}/changes/${seq}/discard`);
+export const retryChange = (siteId: number, seq: number) =>
+  call<{ queued: boolean }>('POST', `/api/sites/${siteId}/changes/${seq}/retry`);
+export const driftPreview = (siteId: number, seq: number) =>
+  call<DriftPreview>('GET', `/api/sites/${siteId}/changes/${seq}/drift`);

@@ -8,6 +8,7 @@ import { InstallPage } from './pages/install';
 import { PairPage } from './pages/pair';
 import { SyncPage } from './pages/sync';
 import { SitePage } from './pages/site';
+import { ChangesPage } from './pages/changes';
 import './ui.css';
 
 const router = createBrowserRouter([
@@ -20,6 +21,7 @@ const router = createBrowserRouter([
       { path: '/sites/:id/install', element: <InstallPage /> },
       { path: '/sites/:id/pair', element: <PairPage /> },
       { path: '/sites/:id/sync', element: <SyncPage /> },
+      { path: '/sites/:id/changes', element: <ChangesPage /> },
       { path: '/sites/:id', element: <SitePage /> },
       { path: '*', element: <Navigate to="/" replace /> },
     ],

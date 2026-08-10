@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { agentContext, api, ApiError, type AgentContext, type Site, type SiteStatus } from '../api';
+import { agentContext, api, ApiError, listChanges, type AgentContext, type Site, type SiteStatus } from '../api';
 import { AgentChat } from '../chat';
 import { Logo } from '../layout';
 
@@ -13,11 +13,56 @@ const CHIP: Record<SiteStatus, { label: string; cls: string }> = {
   refused_multisite: { label: 'multisite refused', cls: 'chip--refused' },
 };
 
+export function SiteSidebar({ site, active, draftCount, footer }: {
+  site: Site;
+  active: 'chat' | 'changes';
+  draftCount: number;
+  footer?: ReactNode;
+}) {
+  const chip = CHIP[site.status];
+  return (
+    <aside className="sidebar">
+      <div className="sidebar__brand"><Logo /> <span>Ferry</span></div>
+      <Link to="/" className="site-sidebar__back">← All sites</Link>
+      <div className="site-card">
+        <span className="site-card__avatar mono">{site.name.charAt(0).toUpperCase()}</span>
+        <div className="site-card__text">
+          <span className="site-card__name">{site.name}</span>
+          <span className={`chip ${chip.cls}`}>{chip.label}</span>
+        </div>
+      </div>
+      <nav className="sidebar__nav">
+        <span className="sidebar__item sidebar__item--disabled"><span className="sidebar__dot" />Overview</span>
+        {active === 'chat' ? (
+          <span className="sidebar__item sidebar__item--active"><span className="sidebar__dot sidebar__dot--accent" />Agent chat</span>
+        ) : (
+          <Link to={`/sites/${site.id}`} className="sidebar__item"><span className="sidebar__dot" />Agent chat</Link>
+        )}
+        {active === 'changes' ? (
+          <span className="sidebar__item sidebar__item--active">
+            <span className="sidebar__dot sidebar__dot--accent" />Changes
+            {draftCount > 0 && <span className="sidebar__badge">{draftCount}</span>}
+          </span>
+        ) : (
+          <Link to={`/sites/${site.id}/changes`} className="sidebar__item">
+            <span className="sidebar__dot" />Changes
+            {draftCount > 0 && <span className="sidebar__badge">{draftCount}</span>}
+          </Link>
+        )}
+        <Link to={`/sites/${site.id}/sync`} className="sidebar__item"><span className="sidebar__dot" />Sync &amp; status</Link>
+        <span className="sidebar__item sidebar__item--disabled"><span className="sidebar__dot" />Settings</span>
+      </nav>
+      {footer}
+    </aside>
+  );
+}
+
 export function SitePage() {
   const { id } = useParams();
   const [site, setSite] = useState<Site | null>(null);
   const [context, setContext] = useState<AgentContext | null>(null);
   const [loadError, setLoadError] = useState('');
+  const [draftCount, setDraftCount] = useState(0);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -33,6 +78,10 @@ export function SitePage() {
     });
   }, [id, navigate]);
 
+  useEffect(() => {
+    void listChanges(Number(id), 'draft').then((r) => setDraftCount(r.changes.length)).catch(() => undefined);
+  }, [id]);
+
   if (loadError) {
     return (
       <div className="page-center">
@@ -43,32 +92,19 @@ export function SitePage() {
   }
   if (!site) return <div className="page-center" />;
 
-  const chip = CHIP[site.status];
-
   return (
     <div className="site-grid">
-      <aside className="sidebar">
-        <div className="sidebar__brand"><Logo /> <span>Ferry</span></div>
-        <Link to="/" className="site-sidebar__back">← All sites</Link>
-        <div className="site-card">
-          <span className="site-card__avatar mono">{site.name.charAt(0).toUpperCase()}</span>
-          <div className="site-card__text">
-            <span className="site-card__name">{site.name}</span>
-            <span className={`chip ${chip.cls}`}>{chip.label}</span>
+      <SiteSidebar
+        site={site}
+        active="chat"
+        draftCount={draftCount}
+        footer={
+          <div className="site-sidebar__footer mono">
+            <div>branch <span className="site-sidebar__accent">agent/work</span></div>
+            {context && <div>base <span className="site-sidebar__muted">production@{context.baseCommit}</span></div>}
           </div>
-        </div>
-        <nav className="sidebar__nav">
-          <span className="sidebar__item sidebar__item--disabled"><span className="sidebar__dot" />Overview</span>
-          <span className="sidebar__item sidebar__item--active"><span className="sidebar__dot sidebar__dot--accent" />Agent chat</span>
-          <span className="sidebar__item sidebar__item--disabled"><span className="sidebar__dot" />Changes</span>
-          <Link to={`/sites/${id}/sync`} className="sidebar__item"><span className="sidebar__dot" />Sync & status</Link>
-          <span className="sidebar__item sidebar__item--disabled"><span className="sidebar__dot" />Settings</span>
-        </nav>
-        <div className="site-sidebar__footer mono">
-          <div>branch <span className="site-sidebar__accent">agent/work</span></div>
-          {context && <div>base <span className="site-sidebar__muted">production@{context.baseCommit}</span></div>}
-        </div>
-      </aside>
+        }
+      />
 
       <AgentChat siteId={site.id} />
 
