@@ -213,16 +213,76 @@ ddev wp option get ferry_demo_vat_surcharge_enabled
 fix the heredoc before continuing; the real proof the hook registered is the next visit to
 any page, which loads the theme normally and runs `add_option`/`add_filter` for real.)
 
-**PASS**: `ferry_demo_vat_surcharge_enabled` reads `1`; placing a >€100 order (see Step 3)
-shows roughly double the expected 21% VAT line.
+**PASS**: `ferry_demo_vat_surcharge_enabled` reads `1`. The exact tax effect is checked next,
+before the order loop starts — see "Verify before starting" below.
 
 ## Step 3: order loop — checkout orders every ~20s, logged, for the whole session
 
 Real HTTP against the fixture's own URL, via the WooCommerce REST API v3 (Basic Auth over
 TLS — WooCommerce's supported non-OAuth auth mode). Line items only, no explicit `total` —
-WooCommerce computes totals server-side via `WC_Abstract_Order::calculate_totals()` →
-`calculate_taxes()` → `WC_Tax::calc_tax()`, the same pipeline a real checkout uses, so the
-planted filter above fires exactly as it would for a genuine customer order.
+the assumption this relies on is that WooCommerce computes totals server-side via
+`WC_Abstract_Order::calculate_totals()` → `calculate_taxes()` → `WC_Tax::calc_tax()`, the
+same pipeline a real checkout uses, so the planted filter above fires exactly as it would for
+a genuine customer order. **This is documented WooCommerce behavior, not something verified
+live against this fixture's installed version** (no products/tax rate/API keys existed on the
+fixture before this task, and seeding them was out of this task's scope) — verify it for real
+before starting the session.
+
+### Verify before starting
+
+Place **one** order for the €150 product (the one above the bug's €100 threshold) through
+the exact request shape the loop will use, and read its total by eye:
+```
+CACERT="$(mkcert -CAROOT)/rootCA.pem"
+BASE="https://ferry-prod.ddev.site"
+CK="ck_..."     # from Step 1.4
+CS="cs_..."     # from Step 1.4
+PID_150="..."   # the €150 product's product_id from Step 1.2
+
+RESP=$(curl -s --cacert "$CACERT" -u "$CK:$CS" -X POST "$BASE/wp-json/wc/v3/orders" \
+  -H 'Content-Type: application/json' \
+  -d "{\"status\":\"processing\",\"billing\":{\"first_name\":\"Ferry\",\"last_name\":\"E2E\",\"address_1\":\"Teststraat 1\",\"city\":\"Amsterdam\",\"postcode\":\"1000AA\",\"country\":\"NL\",\"email\":\"ferry-e2e@example.com\"},\"line_items\":[{\"product_id\":$PID_150,\"quantity\":1}]}")
+echo "$RESP" | python3 -m json.tool
+ORDER_ID=$(echo "$RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
+echo "order id: $ORDER_ID"
+```
+Expected math: €150.00 at 21% VAT is normally €31.50 tax → **`"total": "181.50"`**. With the
+planted bug doubling tax above €100, it should double to €63.00 tax →
+**`"total": "213.00"`**.
+
+- **PASS**: `total` reads `213.00` — the REST v3 assumption holds on this WooCommerce
+  version; proceed to launch the loop below.
+- **STOP if it instead reads `181.50`** (bug didn't fire — REST v3 order creation isn't
+  running totals through the normal cart/order tax pipeline on this version) **or anything
+  else unexpected.** Do not start the session on an order-loop that silently isn't exercising
+  the real pipeline. Fallback: switch the loop to the WooCommerce **Store API** instead of
+  the REST v3 orders endpoint — `POST /wp-json/wc/store/v1/cart/add-item` (body
+  `{"id":$PID,"quantity":1}`) to add the item and get a `Cart-Token` response header, then
+  `POST /wp-json/wc/store/v1/checkout` with that same `Cart-Token` header, a guest
+  `billing_address`, and `"payment_method":"cod"`. This is the real block-checkout pipeline
+  (`WC_Cart`'s own tax calculation, same `WC_Tax::calc_tax()`/`woocommerce_calc_tax` hook) and
+  isn't subject to the REST v3 create-order quirk. Re-run this same €150 verification against
+  the Store API shape before trusting it either, then swap the equivalent request into
+  `order-loop.sh` below (same failure-guard pattern, different endpoint/headers/body).
+
+Once verified, delete this test order so it doesn't skew the count:
+```
+ddev wp eval "wc_get_order($ORDER_ID)->delete(true);"
+```
+— or just leave it and account for the +1 when tallying in Step 7.
+
+### Monitoring while it runs
+
+Watch it live with `tail -f ~/ferry-e2e/order-loop.log`. A healthy run logs one
+`order_id=... total=...` line roughly every 20s. **`ORDER-FAIL` lines are expected and
+harmless in short bursts around the push click** — the write-back's atomic swap holds the
+site briefly unavailable mid-push, so whichever tick lands in that window fails to connect
+or gets a non-order response; the script logs it and retries on the next tick, 20s later.
+Sustained failures for more than about a minute mean something else broke (wrong
+`CK`/`CS`, DDEV actually down, etc.) — investigate before continuing. Expected count over any
+window ≈ `elapsed_seconds / 20` minus the `ORDER-FAIL` count in that window; Step 7's proof
+compares **successful** order ids+totals against this log, so failed attempts (which never
+became a real WooCommerce order) are correctly excluded, not counted as lost orders.
 
 ```bash
 mkdir -p ~/ferry-e2e
@@ -236,13 +296,26 @@ CS="cs_REPLACE_ME"          # from Step 1.4
 PRODUCT_IDS=(0 0 0)         # from Step 1.2's product_id= output
 LOG="$HOME/ferry-e2e/order-loop.log"
 
+# set -e is deliberately NOT in effect inside this loop's body (see the `|| { ...; continue; }`
+# guards below) — a single failed request must never kill the whole background loop, especially
+# during the push's brief swap window, which is exactly when this proof matters most. Failures
+# are logged as ORDER-FAIL and the loop moves on to the next tick.
 while true; do
   PID=${PRODUCT_IDS[$((RANDOM % ${#PRODUCT_IDS[@]}))]}
   RESP=$(curl -s --cacert "$CACERT" -u "$CK:$CS" -X POST "$BASE/wp-json/wc/v3/orders" \
     -H 'Content-Type: application/json' \
-    -d "{\"status\":\"processing\",\"billing\":{\"first_name\":\"Ferry\",\"last_name\":\"E2E\",\"address_1\":\"Teststraat 1\",\"city\":\"Amsterdam\",\"postcode\":\"1000AA\",\"country\":\"NL\",\"email\":\"ferry-e2e@example.com\"},\"line_items\":[{\"product_id\":$PID,\"quantity\":1}]}")
-  ID=$(echo "$RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("id","ERROR"))')
-  TOTAL=$(echo "$RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("total","ERROR"))')
+    -d "{\"status\":\"processing\",\"billing\":{\"first_name\":\"Ferry\",\"last_name\":\"E2E\",\"address_1\":\"Teststraat 1\",\"city\":\"Amsterdam\",\"postcode\":\"1000AA\",\"country\":\"NL\",\"email\":\"ferry-e2e@example.com\"},\"line_items\":[{\"product_id\":$PID,\"quantity\":1}]}") \
+    || { RC=$?; echo "$(date +%T) ORDER-FAIL (curl exit $RC)" >> "$LOG"; sleep 20; continue; }
+  PARSED=$(echo "$RESP" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    print(str(d["id"]) + "," + str(d["total"]))
+except Exception:
+    sys.exit(1)
+' 2>/dev/null) || { echo "$(date +%T) ORDER-FAIL (bad response: $(echo "$RESP" | tr -d "\n" | head -c 200))" >> "$LOG"; sleep 20; continue; }
+  ID="${PARSED%%,*}"
+  TOTAL="${PARSED##*,}"
   echo "$(date -Iseconds) order_id=$ID total=$TOTAL" | tee -a "$LOG"
   sleep 20
 done
@@ -343,10 +416,18 @@ All commands `cd ~/ferry-e2e/prod` first.
    # legacy (only if a future fixture reinstall reads woocommerce_custom_orders_table_enabled = no):
    ddev wp db query "SELECT COUNT(*), SUM(pm.meta_value) FROM wp_posts p JOIN wp_postmeta pm ON pm.post_id = p.ID AND pm.meta_key = '_order_total' WHERE p.post_type = 'shop_order'"
    ```
-2. **The fix is live** — option value and hook both gone:
+2. **The fix is live.** Primary proof — the surcharge is gated on this option, so this is
+   authoritative regardless of how the agent edited the file:
    ```
-   ddev wp option get ferry_demo_vat_surcharge_enabled   # expect: 0
-   grep -c "FERRY DEMO BUG" wp-content/themes/twentytwentyfive/functions.php   # expect: 0
+   ddev wp option get ferry_demo_vat_surcharge_enabled   # PRIMARY — expect: 0
+   ```
+   Secondary indicator only — Step 5 lets the agent "remove or neutralize" the block, so a
+   neutralized-but-still-present copy (e.g. commented out) can leave the marker text in the
+   file even though the bug is genuinely inert. The planted block has **two** marker lines
+   (opening `FERRY DEMO BUG` and closing `END FERRY DEMO BUG`), so a full deletion reads `0`
+   and anything else (including a neutralized-but-present block) reads `2`:
+   ```
+   grep -c "FERRY DEMO BUG" wp-content/themes/twentytwentyfive/functions.php   # secondary — 0 if fully deleted, 2 if left in place (even if neutralized)
    ```
    Place one more order for a >€100 product through the order loop (or manually via the same
    curl call from Step 3) and confirm its tax line is the plain 21%, not doubled.
@@ -408,13 +489,15 @@ demo — easy to edit by hand in wp-admin.
 Roll back the change pushed in Step 6 (still sitting at screen 10 / `status: pushed`).
 
 1. Click **Roll back** on that card.
-2. **Prod files restored:**
+2. **Option restored** (primary proof, same reasoning as Step 7.2):
    ```
-   grep -c "FERRY DEMO BUG" wp-content/themes/twentytwentyfive/functions.php   # expect: 1 (bug is back)
+   ddev wp option get ferry_demo_vat_surcharge_enabled   # PRIMARY — expect: 1
    ```
-3. **Option restored:**
+3. **Prod files restored** (secondary indicator — rollback restores the file byte-for-byte
+   from the backup dir rather than the agent re-authoring it, so this should reliably match;
+   the planted block has two marker lines, so a fully-restored file reads `2`, not `1`):
    ```
-   ddev wp option get ferry_demo_vat_surcharge_enabled   # expect: 1
+   grep -c "FERRY DEMO BUG" wp-content/themes/twentytwentyfive/functions.php   # secondary — expect: 2 (bug is back)
    ```
 4. **Orders still intact** — re-run Step 7.1's `wc_get_orders` tally; count/sum unchanged
    from the last check (the order loop should have kept adding rows in the background the
