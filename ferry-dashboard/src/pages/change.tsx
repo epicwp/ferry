@@ -327,12 +327,12 @@ function PushedView({ change, siteId, onReload, actionError, setActionError }: {
       await rollbackChange(siteId, change.seq);
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : 'Could not roll back.');
-    } finally {
-      setRollingBack(false);
-      // The route answers { rolledBack: true } even when the plugin-side CAS refused — the
-      // change row is the truth; refetch and render whatever status it landed on.
-      await onReload();
     }
+    // The route answers { rolledBack: true } even when the plugin-side CAS refused — the
+    // change row is the truth; refetch and render whatever status it landed on. Stay disabled
+    // until the refetch lands so a double-click can't fire a second rollback POST.
+    await onReload();
+    setRollingBack(false);
   }
 
   return (
