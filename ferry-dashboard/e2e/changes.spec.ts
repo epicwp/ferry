@@ -125,3 +125,23 @@ test('pushing a draft walks the six steps once each and lands on the pushed card
   // the page transitions to the pushed state once the (deliberately delayed) reload resolves
   await expect(page.locator('.status-pill--pushed')).toBeVisible({ timeout: 15_000 });
 });
+
+test('a pushed change shows smoke results and rolls back to screen 12', async ({ page }) => {
+  await signUp(page);
+  const siteId = await createSite(page, 'Pushed shop', `https://pushed-${Date.now()}.example.com`);
+  const { seq } = await seedChange(page, siteId, { status: 'pushed' });
+  await page.goto(`/sites/${siteId}/changes/${seq}`);
+
+  await expect(page.getByText('Live on production')).toBeVisible();
+  await expect(page.locator('.smoke-row')).toHaveCount(3);
+  await expect(page.getByText('€24.79')).toBeVisible();
+  await expect(page.getByText('2 files · 1 DB operation')).toBeVisible();
+  await expect(page.getByText('.ferry-backup/a3f19c2')).toBeVisible();
+  await expect(page.getByText('30 days')).toBeVisible();
+
+  await page.getByRole('button', { name: '↺ Roll back' }).click();
+  await expect(page.getByText('Your site is back to how it was')).toBeVisible();
+  await expect(page.locator('.verify-row')).toHaveCount(3);
+  await expect(page.getByRole('link', { name: 'Back to chat' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Let the agent adjust it' })).toBeVisible();
+});

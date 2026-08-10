@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useLocation } from 'react-router-dom';
 import { agentHistory, agentNewSession, agentSend, ApiError, type AgentWireEvent } from './api';
 
 type ConnState = 'connecting' | 'live' | 'lost';
@@ -84,10 +85,11 @@ function buildBlocks(events: AgentWireEvent[]): Block[] {
 }
 
 export function AgentChat({ siteId }: { siteId: number }) {
+  const location = useLocation();
   const [events, setEvents] = useState<AgentWireEvent[]>([]);
   const [streamText, setStreamText] = useState('');
   const [conn, setConn] = useState<ConnState>('connecting');
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState(() => (location.state as { prefill?: string } | null)?.prefill ?? '');
   const [sendError, setSendError] = useState('');
   const esRef = useRef<EventSource | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  api, ApiError, discardChange, driftPreview, getChange, pushChange,
+  api, ApiError, discardChange, driftPreview, getChange, pushChange, rollbackChange,
   type Change, type DriftPreview, type PushStep, type PushWireEvent, type Site, type StepEvent,
 } from '../api';
 import { changeRef, ConfirmDialog, DiffView, OpsTable, riskOf, StatusPill, timeAgo } from '../change-parts';
@@ -96,7 +96,11 @@ export function ChangePage() {
           <DraftView change={change} siteId={siteId} onReload={reload} actionError={actionError} setActionError={setActionError} navigate={navigate} />
         )}
         {change.status === 'pushing' && <PushingView change={change} siteId={siteId} onDone={reload} />}
-        {/* Tasks 10–11 add pushed / conflict / rolled_back views */}
+        {change.status === 'pushed' && (
+          <PushedView change={change} siteId={siteId} onReload={reload} actionError={actionError} setActionError={setActionError} />
+        )}
+        {change.status === 'rolled_back' && <RolledBackView change={change} siteId={siteId} />}
+        {/* Task 11 adds the conflict view */}
       </div>
     </div>
   );
@@ -307,6 +311,110 @@ function DraftView({ change, siteId, onReload, actionError, setActionError, navi
           onCancel={() => setConfirmOpen(false)}
         />
       )}
+    </div>
+  );
+}
+
+function PushedView({ change, siteId, onReload, actionError, setActionError }: {
+  change: Change; siteId: number; onReload: () => Promise<void>;
+  actionError: string; setActionError: (e: string) => void;
+}) {
+  const [rollingBack, setRollingBack] = useState(false);
+
+  async function rollBack() {
+    setRollingBack(true);
+    try {
+      await rollbackChange(siteId, change.seq);
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Could not roll back.');
+    } finally {
+      setRollingBack(false);
+      // The route answers { rolledBack: true } even when the plugin-side CAS refused — the
+      // change row is the truth; refetch and render whatever status it landed on.
+      await onReload();
+    }
+  }
+
+  return (
+    <div className="pushed-wrap">
+      <div className="change-card change-card--pushed">
+        <div className="change-section">
+          <div className="change-head">
+            <span className="state-icon state-icon--ok">✓</span>
+            <span className="change-head__title">Live on production</span>
+          </div>
+          <p className="card__sub">The change is live and all smoke checks passed.</p>
+          <div className="change-meta">
+            {change.pushedAt && <span>{new Date(change.pushedAt).toLocaleTimeString()}</span>}
+            {change.prodRef && <span>prod @ {change.prodRef}</span>}
+          </div>
+        </div>
+        <div className="change-section">
+          <div className="section-label">Smoke test</div>
+          {change.smokeResult === null ? (
+            <div className="strip__sub">smoke status unknown after a server restart — verify manually.</div>
+          ) : (
+            change.smokeResult.map((s, i) => (
+              <div key={i} className="smoke-row">
+                <span className={s.ok ? 'check-dot' : 'check-dot check-dot--fail'}>{s.ok ? '✓' : '!'}</span>
+                <span className="smoke-row__label">{s.label}</span>
+                {s.detail && <span className="smoke-row__metric mono">{s.detail}</span>}
+              </div>
+            ))
+          )}
+        </div>
+        <div className="change-section">
+          <div className="strip">
+            <div>
+              <div className="section-label">Applied</div>
+              <div style={{ fontSize: 12.5 }}>{change.files.length} files · {change.ops.length} DB operation{change.ops.length === 1 ? '' : 's'}</div>
+            </div>
+            <div>
+              <div className="section-label">Backup</div>
+              <div className="mono" style={{ fontSize: 12.5 }}>.ferry-backup/{(change.backupTxid ?? '').slice(0, 7)}</div>
+            </div>
+          </div>
+        </div>
+        {actionError !== '' && <div className="change-section"><div className="form-error">{actionError}</div></div>}
+        <div className="change-actions">
+          <span className="change-actions__note">Not right? Rolling back is one click — the journal is replayed in reverse.</span>
+          <button type="button" className="btn btn--danger-outline" disabled={rollingBack} onClick={rollBack}>↺ Roll back</button>
+        </div>
+      </div>
+      <p className="retention-note">The rollback button stays available as long as the backup exists — <span className="mono">30 days</span>.</p>
+    </div>
+  );
+}
+
+function RolledBackView({ change, siteId }: { change: Change; siteId: number }) {
+  return (
+    <div className="change-card">
+      <div className="change-section">
+        <div className="change-head">
+          <span className="state-icon state-icon--neutral">↺</span>
+          <span className="change-head__title">Your site is back to how it was</span>
+        </div>
+        <p className="card__sub">Everything from this change has been undone. The change is kept, so you can push it again later or have the agent adjust it.</p>
+        <div className="change-meta">
+          {change.rolledBackAt && <span>rolled back {new Date(change.rolledBackAt).toLocaleTimeString()}</span>}
+          <span>prod @ {change.baseSha.slice(0, 7)}</span>
+        </div>
+      </div>
+      <div className="change-section">
+        <div className="verify-row"><span className="check-dot">✓</span><span>{change.files.length} files restored from backup</span><span className="verify-row__value mono">.ferry-backup/{(change.backupTxid ?? '').slice(0, 7)}</span></div>
+        <div className="verify-row"><span className="check-dot">✓</span><span>DB journal replayed in reverse</span><span className="verify-row__value mono">{change.ops.length} operation{change.ops.length === 1 ? '' : 's'}</span></div>
+        <div className="verify-row"><span className="check-dot">✓</span><span>Verification — hashes match the snapshot</span></div>
+      </div>
+      <div className="change-actions">
+        <span className="change-actions__note">The agent branch <span className="mono">{change.branch}</span> is kept.</span>
+        <Link to={`/sites/${siteId}`} className="btn btn--outline">Back to chat</Link>
+        <Link
+          to={`/sites/${siteId}`} className="btn btn--primary"
+          state={{ prefill: `${changeRef(change.seq)} ("${change.title}") was rolled back — please take another look and adjust the fix.` }}
+        >
+          Let the agent adjust it
+        </Link>
+      </div>
     </div>
   );
 }

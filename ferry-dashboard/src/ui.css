@@ -362,3 +362,12 @@ a:hover { color: oklch(0.44 0.16 262); }
 .modal__actions { display: flex; justify-content: flex-end; gap: 10px; }
 .btn--danger { background: var(--red); color: #fff; font-weight: 600; }
 .btn--danger-outline { border: 1.5px solid var(--red); color: var(--red); background: var(--surface); font-weight: 600; }
+
+.pushed-wrap { width: 100%; max-width: 680px; }
+.smoke-row { display: flex; align-items: center; gap: 9px; padding: 5px 0; font-size: 13px; }
+.smoke-row__label { flex: 1; }
+.smoke-row__metric { font-size: 11px; color: var(--faint); }
+.check-dot--fail { background: var(--red-weak); border-color: var(--red); color: var(--red); }
+.retention-note { text-align: center; font-size: 12.5px; color: var(--faint); margin-top: 14px; }
+.verify-row { display: flex; align-items: center; gap: 9px; padding: 5px 0; font-size: 13px; }
+.verify-row__value { margin-left: auto; font-size: 11px; color: var(--faint); }
