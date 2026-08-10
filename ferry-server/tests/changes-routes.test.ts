@@ -3,6 +3,7 @@ import { scriptedRunner } from '../src/agent/scripted-runner.js';
 import type { AgentWireEvent } from '../src/agent/types.js';
 import { scriptedPushRunner } from '../src/push/scripted-push-runner.js';
 import type { PushWireEvent } from '../src/push-manager.js';
+import type { StepEvent } from '../src/push/types.js';
 import type { Change } from '../src/store.js';
 import { agentDeps, makeApp, signup, stubEngine } from './helpers/testApp.js';
 
@@ -248,7 +249,11 @@ describe('changes routes', () => {
     const events = sseEvents<PushWireEvent>(Buffer.concat(chunks).toString('utf8'));
     const seqs = events.map((e) => e.seq);
     expect(new Set(seqs).size).toBe(seqs.length);
-    expect(events.filter((e) => e.type === 'push_step')).toHaveLength(12); // 6 steps x (start + ok)
+    expect(events.filter((e) => e.type === 'push_step')).toHaveLength(13); // 6 steps x (start + ok) + the drift crash-marker start (push.ts:124)
+    const driftStarts = events.filter((e) => e.type === 'push_step')
+      .map((e) => e.payload as StepEvent)
+      .filter((p) => p.step === 'drift' && p.status === 'start');
+    expect(driftStarts).toHaveLength(2); // faithful to the real runner — the UI must dedupe
     expect(events.filter((e) => e.type === 'push_done')).toHaveLength(1);
   });
 
@@ -274,7 +279,7 @@ describe('changes routes', () => {
     const events = sseEvents<PushWireEvent>(Buffer.concat(chunks).toString('utf8'));
     const seqs = events.map((e) => e.seq);
     expect(new Set(seqs).size).toBe(seqs.length);
-    expect(events.filter((e) => e.type === 'push_step')).toHaveLength(12);
+    expect(events.filter((e) => e.type === 'push_step')).toHaveLength(13); // 6 steps x (start + ok) + the drift crash-marker start (push.ts:124)
     expect(events.filter((e) => e.type === 'push_done')).toHaveLength(1);
   });
 });
