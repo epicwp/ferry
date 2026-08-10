@@ -31,6 +31,22 @@ export function normalizeSdkMessage(msg: unknown): RunnerEvent[] {
     return [{ type: 'sdk_session', sdkSessionId: m.session_id }];
   }
   if (m.type === 'assistant') {
+    // Check structured error field first (sdk.d.ts:2858 SDKAssistantMessage.error?: SDKAssistantMessageError)
+    if (typeof m.error === 'string' && m.error !== '') {
+      const content = m.message?.content;
+      let firstText = '';
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block?.type === 'text' && typeof block.text === 'string' && block.text !== '') {
+            firstText = block.text;
+            break;
+          }
+        }
+      }
+      const message = firstText ? `API error (${m.error}): ${firstText}` : `API error (${m.error})`;
+      return [{ type: 'runner_error', message }];
+    }
+
     const out: RunnerEvent[] = [];
     const content = m.message?.content;
     if (Array.isArray(content)) {

@@ -128,4 +128,22 @@ describe('normalizeSdkMessage', () => {
     });
     expect(events).toEqual([{ type: 'agent_text', text: 'API errors are worth retrying.' }]);
   });
+
+  it('maps structured error field (rate_limit) with empty content to runner_error', () => {
+    const events = normalizeSdkMessage({
+      type: 'assistant',
+      error: 'rate_limit',
+      message: { content: [] },
+    });
+    expect(events).toEqual([{ type: 'runner_error', message: 'API error (rate_limit)' }]);
+  });
+
+  it('maps structured error field (authentication_failed) with text block to runner_error only', () => {
+    const events = normalizeSdkMessage({
+      type: 'assistant',
+      error: 'authentication_failed',
+      message: { content: [{ type: 'text', text: 'API Error: 401 {"type":"error"}' }] },
+    });
+    expect(events).toEqual([{ type: 'runner_error', message: 'API error (authentication_failed): API Error: 401 {"type":"error"}' }]);
+  });
 });
