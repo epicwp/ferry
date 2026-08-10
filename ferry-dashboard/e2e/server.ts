@@ -134,12 +134,13 @@ app.post('/e2e/changes', async (request) => {
         : null),
     });
   }
+  const fresh = store.changeById(change.id)!;
   if (body.emitCard) {
     agentManager?.appendSystemEvent(body.siteId, 'change_card', {
-      changeId: change.id, seq: change.seq, title: change.title, status: change.status,
+      changeId: fresh.id, seq: fresh.seq, title: fresh.title, status: fresh.status,
     });
   }
-  return store.changeById(change.id);
+  return fresh;
 });
 
 await app.listen({ port: 4173, host: '127.0.0.1' });
