@@ -98,11 +98,30 @@ test('pushing a draft walks the six steps once each and lands on the pushed card
   const siteId = await createSite(page, 'Push shop', `https://push-${Date.now()}.example.com`);
   const { seq } = await seedChange(page, siteId);
   await page.goto(`/sites/${siteId}/changes/${seq}`);
+
+  // The scripted runner finishes in ~120ms, so the 13-event burst and the push_done-triggered
+  // reload() land within a few ms of each other — PushingView unmounts (status flips to pushed)
+  // before the dedupe assertions below get a chance to observe the fully-drained log. The first
+  // two GET /changes/:seq calls (the page's mount-time fetch, then the one right after the
+  // click, which shows the pushing state in the first place) must stay fast — only the *third*
+  // call (fired from push_done, once PushingView is already mounted) is delayed, opening a wide,
+  // stable window to assert the deduped log without touching app code or the reducer/dedupe
+  // logic under test.
+  let reloadCount = 0;
+  await page.route(`**/api/sites/${siteId}/changes/${seq}`, async (route) => {
+    reloadCount += 1;
+    if (reloadCount > 2) await new Promise((r) => setTimeout(r, 300));
+    await route.continue();
+  });
   await page.getByRole('button', { name: 'Push to production' }).click();
 
   await expect(page.getByText('Nothing is final until the last step succeeds.', { exact: false })).toBeVisible();
   await expect(page.locator('.phase')).toHaveCount(6); // exactly one row per step — duplicate drift start deduped
   await expect(page.locator('.push-log')).toBeVisible();
-  // scripted runner finishes in ~120ms; the page transitions to the pushed state
+  // dedupe proof: 13 wire events minus the suppressed duplicate `drift start` = 12 log lines,
+  // with the duplicate drift-start marker collapsed to exactly one line.
+  await expect(page.locator('.push-log > div')).toHaveCount(12, { timeout: 15_000 });
+  await expect(page.locator('.push-log > div', { hasText: 'drift: start' })).toHaveCount(1);
+  // the page transitions to the pushed state once the (deliberately delayed) reload resolves
   await expect(page.locator('.status-pill--pushed')).toBeVisible({ timeout: 15_000 });
 });
