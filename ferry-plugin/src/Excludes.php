@@ -34,6 +34,11 @@ final class Excludes
         if (in_array($relpath, self::FILES, true)) {
             return true;
         }
+        // Security skim: wp-config backup/editor copies (.bak, -old, ~, .swp) carry DB
+        // credentials and salts - any basename containing "wp-config" stays home.
+        if (stripos(basename($relpath), 'wp-config') !== false) {
+            return true;
+        }
         if (in_array(basename($relpath), self::BASENAMES, true)) {
             return true;
         }

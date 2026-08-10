@@ -31,4 +31,17 @@ PHP;
             'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DB_HOST',
         ], Config::DENYLIST);
     }
+
+    public function test_denied_blocks_secret_shaped_constant_names(): void
+    {
+        // Security skim item: hosts/plugins stuff live API secrets into wp-config
+        // constants; suffix-shaped names must never travel to the clone repo.
+        foreach (['STRIPE_SECRET_KEY', 'SOME_API_SECRET', 'GITHUB_TOKEN', 'SMTP_PASS',
+                  'MAIL_PASSWORD', 'AUTH_KEY', 'DB_PASSWORD'] as $name) {
+            $this->assertTrue(Config::denied($name), $name);
+        }
+        foreach (['WP_DEBUG', 'WP_CACHE', 'TABLE_PREFIX', 'WP_MEMORY_LIMIT', 'PASSWORDS_PAGE'] as $name) {
+            $this->assertFalse(Config::denied($name), $name);
+        }
+    }
 }

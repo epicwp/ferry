@@ -129,6 +129,45 @@ final class DbOpsTest extends TestCase
         $this->assertCount(5, $wpdb->queries);
     }
 
+    public function test_commit_invalidates_option_and_postmeta_object_caches(): void
+    {
+        // Security skim item: raw-SQL writes bypass persistent object caches (Redis/
+        // Memcached) - without invalidation the site and even the smoke check keep
+        // seeing the stale cached value after a pushed option change.
+        $GLOBALS['ferry_cache_deletes'] = [];
+        $ops = [
+            ['kind' => 'option_set', 'name' => 'ferry_a', 'old' => '1', 'new' => '2'],
+            ['kind' => 'postmeta_set', 'postId' => 7, 'key' => 'k', 'old' => 'x', 'new' => 'y'],
+        ];
+        $wpdb = new FakeWpdb([
+            ['option_value' => '1'],
+            ['meta_value' => 'x'],
+        ]);
+
+        $result = DbOps::apply_in_transaction($wpdb, $ops, [], 'wp_', false);
+
+        $this->assertTrue($result['committed']);
+        $this->assertContains(['ferry_a', 'options'], $GLOBALS['ferry_cache_deletes']);
+        $this->assertContains(['alloptions', 'options'], $GLOBALS['ferry_cache_deletes']);
+        $this->assertContains([7, 'post_meta'], $GLOBALS['ferry_cache_deletes']);
+    }
+
+    public function test_conflict_invalidates_no_caches(): void
+    {
+        $GLOBALS['ferry_cache_deletes'] = [];
+        $ops = [
+            ['kind' => 'option_set', 'name' => 'ferry_a', 'old' => '1', 'new' => '2'],
+        ];
+        $wpdb = new FakeWpdb([
+            ['option_value' => 'drifted'],
+        ]);
+
+        $result = DbOps::apply_in_transaction($wpdb, $ops, [], 'wp_', false);
+
+        $this->assertFalse($result['committed']);
+        $this->assertSame([], $GLOBALS['ferry_cache_deletes']);
+    }
+
     public function test_op_with_matching_precondition_reports_one_conflict_not_two(): void
     {
         // Live finding (Plan 5a acceptance): the op's old-value check and its matching

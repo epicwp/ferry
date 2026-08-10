@@ -159,12 +159,12 @@ current locations are given here.
 ### 3. wp-config & secrets — one GAP, two DECIDEs
 - `wp-config.php` exact-excluded read-side (src/Excludes.php:FILES) and the whole
   `wp-config*` basename family is refused **write-side** (src/Paths.php:92).
-- **GAP (read-side, still open):** backup copies (`wp-config.php.bak`, `wp-config-old.php`,
-  `~`/swap files) are still NOT excluded from pulls — `Excludes::FILES` matches the exact
-  name only. They would travel with DB credentials into the clone repo the agent reads.
-  Decide: accept for v0 (own server only) or pattern-exclude before merge.
-- `Config::DENYLIST` (src/Config.php:12) is salts + `DB_*` only. **DECIDE:** the
-  `*_KEY`/`*_SECRET`/`*_TOKEN` pattern-filter question from the base doc stands.
+- **FIXED at checkpoint B:** backup copies (`wp-config.php.bak`, `wp-config-old.php`,
+  `~`/swap files) no longer travel — any basename containing `wp-config` is excluded
+  read-side too (`Excludes::excluded`, tests in ExcludesTest.php).
+- **FIXED at checkpoint B:** `Config::denied()` now also drops secret-shaped constant
+  names (`*_KEY`/`*_SECRET`/`*_TOKEN`/`*_PASSWORD`/`*_PASS`/`*_PWD`) on top of
+  `DENYLIST` (src/Config.php, tests in ConfigTest.php).
 - Uploads hatch: `Excludes::allowed_upload` (src/Excludes.php:52) still serves any
   explicitly requested uploads path; logs stay blocked. **DECIDE:** confirm acceptable
   now the agent can request uploads autonomously (fetch_uploads tool).
@@ -219,13 +219,28 @@ current locations are given here.
   *intended* path, `FERRY_AGENT_MAX_BUDGET_USD` caps sessions, and pushes are
   human-triggered — but a prompt-injected agent could sign `/stage`/`/commit` directly.
   Plan 6 isolation is the designed fix. Sign consciously below.
-- **Written-acceptance item 2 (raw-SQL option writes bypass persistent object caches):**
-  unchanged as described above (lines 112-120). `DbOps::apply()` writes `wp_options`
-  via `$wpdb->query()`; on Redis/Memcached hosts the cached value (incl. `alloptions`)
-  is not invalidated — the site and even the smoke check can keep seeing the stale
-  value. The dev fixture has no persistent cache, so the acceptance run could not
-  surface it. Either add `wp_cache_delete` after COMMIT (small, plugin-side) or accept
-  for v1. Sign consciously below.
+- **Written-acceptance item 2 — FIXED at checkpoint B:** `DbOps::invalidate_caches()`
+  now runs after COMMIT on both the commit and rollback paths: `wp_cache_delete` per
+  touched option (+ the `alloptions` bundle) and per touched postmeta post. `row_*` ops
+  have no reliable cache key — accepted; the refused-table policy keeps those away from
+  WP's hot cached entities (tests in DbOpsTest.php). No conscious acceptance needed
+  anymore.
+
+### What remains for the human signature — three v0 acceptances
+
+Everything else in this checklist is verified (pointers above) or fixed at this
+checkpoint. The lead-engineer recommendation on all three is **accept for v0**:
+
+- **A. Agent-reachable write secret until Plan 6.** The agent subprocess can read
+  `profile.json`; that secret signs writes. Mitigations today: pushing stays one human
+  click, `FERRY_AGENT_MAX_BUDGET_USD` caps sessions, and there are no customer installs
+  before Plan 6's Firecracker isolation lands.
+- **B. Pairing has no rate limit.** ~39 bits entropy, 10-minute TTL, single-use,
+  timing-safe compare — brute force within the window is not realistic; codes only
+  exist right after the site owner mints one.
+- **C. v0 residual risks.** The uploads escape-hatch serves explicitly requested
+  customer files to the agent (by design, §2.8); the staging/backup `.htaccess` deny is
+  inert on nginx hosts, where the unguessable txid and short lifetime are the guard.
 
 ## Sign-off
 

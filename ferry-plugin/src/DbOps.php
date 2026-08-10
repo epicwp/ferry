@@ -283,7 +283,34 @@ final class DbOps
         }
 
         $wpdb->query('COMMIT');
+        self::invalidate_caches($ops);
         return ['committed' => true, 'conflicts' => []];
+    }
+
+    /** Security skim: raw-SQL writes bypass persistent object caches (Redis/Memcached) -
+     *  without this the running site (and the push's own smoke check) keeps reading the
+     *  stale cached value. Covers commit AND rollback (both route through
+     *  apply_in_transaction). row_* ops have no reliable cache key - accepted; the
+     *  refused-table policy keeps those away from WP's hot cached entities anyway. */
+    private static function invalidate_caches(array $ops): void
+    {
+        $touchedOptions = false;
+        foreach ($ops as $op) {
+            switch ($op['kind']) {
+                case 'option_set':
+                case 'option_delete':
+                    wp_cache_delete((string) $op['name'], 'options');
+                    $touchedOptions = true;
+                    break;
+                case 'postmeta_set':
+                case 'postmeta_delete':
+                    wp_cache_delete((int) $op['postId'], 'post_meta');
+                    break;
+            }
+        }
+        if ($touchedOptions) {
+            wp_cache_delete('alloptions', 'options'); // WP's option API also caches the autoload bundle
+        }
     }
 
     private static function label(array $op): string
