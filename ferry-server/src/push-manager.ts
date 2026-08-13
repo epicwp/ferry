@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { ROLLBACK_FAILED_PREFIX } from './push/types.js';
-import type { ChangeSpec, PushOutcome, PushRunner, PushStep, StepEvent } from './push/types.js';
+import type { ChangeSpec, Conflict, PushOutcome, PushRunner, PushStep, StepEvent } from './push/types.js';
 import type { Change, PushRun, Site, Store } from './store.js';
 
 // Steps push() (ferry-cli/src/push.ts) emits BEFORE the single /commit call - if the runner
@@ -17,6 +17,13 @@ type Listener = (e: PushWireEvent) => void;
 
 export interface PushManagerOpts {
   specFor(change: Change): ChangeSpec;
+}
+
+/** apply_error means the DB write itself failed (not drift) — surface it as a readable
+ *  conflict row instead of an empty conflict card (issue #9). */
+function rollbackConflict(result: { conflicts?: Conflict[]; applyError?: { key: string; detail: string } }): Conflict[] {
+  if (result.applyError) return [{ key: result.applyError.key, expected: 'rollback applied', found: result.applyError.detail }];
+  return result.conflicts ?? [];
 }
 
 /**
@@ -167,7 +174,7 @@ export class PushManager {
       if (result.ok) {
         this.store.setChangeStatus(change.id, 'rolled_back', { rolledBackAt: new Date().toISOString() });
       } else {
-        this.store.setChangeStatus(change.id, 'conflict', { conflict: result.conflicts ?? [] });
+        this.store.setChangeStatus(change.id, 'conflict', { conflict: rollbackConflict(result) });
       }
     } finally {
       this.pushing.delete(site.id);
@@ -220,7 +227,7 @@ export class PushManager {
       if (rb.ok) {
         this.store.setChangeStatus(change.id, 'rolled_back', { rolledBackAt: now });
       } else {
-        this.store.setChangeStatus(change.id, 'conflict', { conflict: rb.conflicts ?? [] });
+        this.store.setChangeStatus(change.id, 'conflict', { conflict: rollbackConflict(rb) });
       }
       return;
     }

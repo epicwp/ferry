@@ -13,7 +13,7 @@ export interface PushRunner {
     spec: ChangeSpec,
     opts: { headSha: string; force?: boolean; txid?: string; onStep: (e: StepEvent) => void },
   ): Promise<PushOutcome>;
-  rollback(slug: string, opts: { txid: string; ops: DbOp[] }): Promise<{ ok: boolean; conflicts?: Conflict[] }>;
+  rollback(slug: string, opts: { txid: string; ops: DbOp[] }): Promise<{ ok: boolean; conflicts?: Conflict[]; applyError?: { key: string; detail: string } }>;
   txStatus(slug: string, txid: string): Promise<'committed' | 'dirty' | 'staged' | 'rolled_back' | 'unknown'>;
   /** Targeted drift preview (plugin POST /ferry/v1/hashes): current sha256 per path, null when
    *  the path doesn't resolve. Optional — hand-rolled test fakes may omit it. */
