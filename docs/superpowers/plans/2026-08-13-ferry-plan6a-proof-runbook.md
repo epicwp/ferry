@@ -216,6 +216,58 @@ Robbert's own direct action (running the curl sequence himself, or explicitly
 confirming — in his own message, not relayed through another agent — that he wants an
 agent to use a credential minted this way).
 
+**The generic-500 behavior itself is not unverified** — only this specific live,
+in-server demonstration is deferred. `ferry-server/tests/error-handler.test.ts` covers
+the same code path automatically and runs in every gate:
+
+```ts
+app.get('/boom', () => { throw new Error('secret-internal-detail'); });
+const res = await app.inject({ method: 'GET', url: '/boom' });
+expect(res.statusCode).toBe(500);
+expect(res.json()).toEqual({ error: 'Internal server error' });
+expect(res.body).not.toContain('secret-internal-detail');
+expect(spy).toHaveBeenCalledWith(expect.stringContaining('GET /boom'), expect.any(Error));
+```
+
+It asserts exactly the three things Proof 5 would have shown live: the response body is
+the generic `{ error: 'Internal server error' }`, it does **not** leak the thrown
+error's message, and `console.error` was called with the method+URL and the `Error`
+object (the server-side detail). This test is part of the `ferry-server` suite reported
+green above (209 tests) — the behavior is exercised on every gate run, just not against
+the real fixture with a real clone directory.
+
+### Robbert can confirm this live himself
+
+The exact sequence, run locally (the clone dir for site 2 is currently absent — its last
+sync's clone was already gone before this task started — so re-sync site 2 first, or
+point this at any other paired site whose clone directory you then move away):
+
+```
+# 1. start the server
+export NODE_EXTRA_CA_CERTS="$(mkcert -CAROOT)/rootCA.pem"
+FERRY_AGENT_MAX_BUDGET_USD=2 npm --workspace ferry-server run dev
+
+# 2. in another shell, log in as yourself to get a real cookie
+curl -s -c cookies.txt -X POST http://127.0.0.1:4000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"robbertvermeulen@gmail.com","password":"<your password>"}'
+
+# 3. (if needed) re-sync site 2 so a real clone exists, then move it away
+mv ~/.ferry/clones/ferry-prod-ddev-site ~/.ferry/clones/ferry-prod-ddev-site.bak
+
+# 4. trigger the route with the clone missing
+curl -s -b cookies.txt -X POST http://127.0.0.1:4000/api/sites/2/agent/messages \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"say hello"}'
+# expect: {"error":"Internal server error"}
+# and the server log (same terminal as step 1) to show the "POST ... → 500:" line
+# with the underlying stack trace
+
+# 5. restore the clone directory
+mv ~/.ferry/clones/ferry-prod-ddev-site.bak ~/.ferry/clones/ferry-prod-ddev-site
+ls ~/.ferry/clones/ferry-prod-ddev-site   # confirm it's back
+```
+
 ---
 
 ## Proof 6 — hashed sessions + purge
@@ -309,10 +361,13 @@ flow end to end.
 
 ## Summary
 
-5 of 6 proofs executed live and passed (1, 2, 3, 4, 6). Proof 5 was not completed —
-initially blocked by lack of access, then a controller-offered credential workaround was
-deliberately declined (see that section for the full reasoning); it remains open for
-Robbert's own action. The full gate is green: all four suites and three typechecks pass;
-the dashboard e2e suite is 18/18 clean after the controller cleared a stale DDEV project
-left over from a prior run (the one e2e flake seen along the way reproduced as a
-pre-existing timing issue, not a regression, and did not recur on re-run).
+5 of 6 proofs executed live and passed (1, 2, 3, 4, 6). Proof 5's live, in-server
+demonstration was not completed — initially blocked by lack of access, then a
+controller-offered credential workaround was deliberately declined (see that section
+for the full reasoning); a copy-paste sequence is provided there for Robbert to run it
+himself. The underlying generic-500 *behavior* is not unverified, though: it's covered
+automatically by `ferry-server/tests/error-handler.test.ts`, part of the green gate
+below. The full gate is green: all four suites and three typechecks pass; the dashboard
+e2e suite is 18/18 clean after the controller cleared a stale DDEV project left over
+from a prior run (the one e2e flake seen along the way reproduced as a pre-existing
+timing issue, not a regression, and did not recur on re-run).
