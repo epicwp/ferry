@@ -20,6 +20,9 @@ mkdirSync(home, { recursive: true });
 const store = new Store(join(home, 'server.db'));
 const recovered = store.recoverInterruptedSyncs();
 store.recoverInterruptedAgentSessions();
+store.purgeExpiredSessions();
+const purgeTimer = setInterval(() => store.purgeExpiredSessions(), 60 * 60_000);
+purgeTimer.unref(); // must not keep the process alive on its own
 
 const cloneDir = (slug: string) => join(ferryHome(), 'clones', slug);
 

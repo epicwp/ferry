@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -193,6 +194,43 @@ describe('Store', () => {
 
       // Re-opening (column now present) must not throw - the ALTER TABLE guard is idempotent.
       expect(() => new Store(dbPath).close()).not.toThrow();
+    });
+  });
+
+  describe('session hashing and purge', () => {
+    it('stores only the sha256 of the token, and authenticates by raw token', () => {
+      const store = new Store(':memory:');
+      const user = store.createUser('s@example.com', 'x:y')!;
+      store.createSession('raw-token-1', user.id, '2099-01-01T00:00:00.000Z');
+      const rows = (store as any).db.prepare('SELECT token_hash FROM sessions').all() as { token_hash: string }[];
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.token_hash).toBe(createHash('sha256').update('raw-token-1').digest('hex'));
+      expect(store.userForSession('raw-token-1')?.id).toBe(user.id);
+      store.deleteSession('raw-token-1');
+      expect(store.userForSession('raw-token-1')).toBeUndefined();
+    });
+
+    it('purges expired sessions and keeps live ones', () => {
+      const store = new Store(':memory:');
+      const user = store.createUser('p@example.com', 'x:y')!;
+      store.createSession('expired', user.id, '2000-01-01T00:00:00.000Z');
+      store.createSession('live', user.id, '2099-01-01T00:00:00.000Z');
+      expect(store.purgeExpiredSessions()).toBe(1);
+      expect(store.userForSession('live')).toBeDefined();
+    });
+
+    it('migrates a pre-6a plaintext sessions table by dropping it', () => {
+      const path = join(mkdtempSync(join(tmpdir(), 'ferry-store-')), 's.db');
+      const raw = new Database(path);
+      raw.exec('CREATE TABLE sessions (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires_at TEXT NOT NULL)');
+      raw.prepare('INSERT INTO sessions VALUES (?, ?, ?)').run('plain', 1, '2099-01-01T00:00:00.000Z');
+      raw.close();
+      const store = new Store(path);
+      const cols = (store as any).db.prepare('PRAGMA table_info(sessions)').all() as { name: string }[];
+      expect(cols.some((c) => c.name === 'token_hash')).toBe(true);
+      expect(cols.some((c) => c.name === 'token')).toBe(false);
+      expect((store as any).db.prepare('SELECT COUNT(*) AS n FROM sessions').get()).toEqual({ n: 0 });
+      store.close();
     });
   });
 });

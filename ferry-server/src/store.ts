@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
 import type { ChangeFile, Conflict, DbOp, Precondition, SmokeCheck, SmokeResult } from '../../ferry-cli/src/push-types.js';
 
@@ -110,7 +111,7 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
-  token TEXT PRIMARY KEY,
+  token_hash TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id),
   expires_at TEXT NOT NULL
 );
@@ -196,6 +197,12 @@ function isConstraintError(err: unknown): boolean {
   return err instanceof Error && String((err as { code?: unknown }).code ?? '').startsWith('SQLITE_CONSTRAINT');
 }
 
+/** Sessions are stored as sha256(token) — a DB leak yields nothing usable, and the
+ *  256-bit random token has no structure to brute-force (spec 6a §3.2). */
+function tokenHash(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
 function toSite(row: SiteRow): Site {
   return {
     id: row.id, userId: row.user_id, name: row.name, url: row.url, slug: row.slug,
@@ -238,6 +245,13 @@ export class Store {
     if (!changeCols.some((c) => c.name === 'smoke_result_json')) {
       this.db.exec('ALTER TABLE changes ADD COLUMN smoke_result_json TEXT');
     }
+    // 6a migration: the pre-6a sessions table stored the raw bearer token as PK.
+    // Drop and recreate — every session re-authenticates once, accepted pre-launch.
+    const sessionCols = this.db.prepare('PRAGMA table_info(sessions)').all() as { name: string }[];
+    if (sessionCols.some((c) => c.name === 'token')) {
+      this.db.exec('DROP TABLE sessions');
+      this.db.exec(SCHEMA);
+    }
   }
 
   close(): void {
@@ -264,7 +278,7 @@ export class Store {
   }
 
   createSession(token: string, userId: number, expiresAt: string): void {
-    this.db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)').run(token, userId, expiresAt);
+    this.db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)').run(tokenHash(token), userId, expiresAt);
   }
 
   userForSession(token: string): User | undefined {
@@ -272,14 +286,18 @@ export class Store {
       .prepare(
         `SELECT u.id, u.email, u.password_hash FROM sessions s
          JOIN users u ON u.id = s.user_id
-         WHERE s.token = ? AND s.expires_at > ?`,
+         WHERE s.token_hash = ? AND s.expires_at > ?`,
       )
-      .get(token, new Date().toISOString()) as { id: number; email: string; password_hash: string } | undefined;
+      .get(tokenHash(token), new Date().toISOString()) as { id: number; email: string; password_hash: string } | undefined;
     return row ? { id: row.id, email: row.email, passwordHash: row.password_hash } : undefined;
   }
 
   deleteSession(token: string): void {
-    this.db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
+    this.db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash(token));
+  }
+
+  purgeExpiredSessions(): number {
+    return this.db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(new Date().toISOString()).changes;
   }
 
   createSite(userId: number, name: string, url: string, slug: string): Site | undefined {
