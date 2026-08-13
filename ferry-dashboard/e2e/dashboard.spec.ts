@@ -212,6 +212,21 @@ test('3b gate: sign up → add site → pair → watch progress → ready in the
   await expect(page.locator('.status-pill--pushed')).toBeVisible({ timeout: 15_000 });
   await page.goBack();
 
+  // ---- 6a: rolling back and clicking "Let the agent adjust it" prefills the composer
+  // with the rollback nudge (issue #11), but a reload must not re-seed it — the useEffect
+  // in chat.tsx clears the history state right after consuming it.
+  await page.goto(`/sites/${siteId}/changes/${seeded.seq}`);
+  await page.getByRole('button', { name: '↺ Roll back' }).click();
+  await expect(page.getByText('Your site is back to how it was')).toBeVisible();
+  await page.getByRole('link', { name: 'Let the agent adjust it' }).click();
+  await expect(page).toHaveURL(`/sites/${siteId}`);
+  const adjustComposer = page.getByPlaceholder('Ask a follow-up or request another fix…');
+  await expect(adjustComposer).toHaveValue(
+    `CHANGE-${String(seeded.seq).padStart(4, '0')} ("VAT calculation fixed") was rolled back — please take another look and adjust the fix.`,
+  );
+  await page.reload();
+  await expect(adjustComposer).toHaveValue('');
+
   // ---- 5b: retry posts the conflict into the chat ----
   const conflictSeed = await page.request.post('/e2e/changes', { data: { siteId, status: 'conflict' } });
   const conflictChange = await conflictSeed.json();
