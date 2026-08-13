@@ -119,6 +119,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       : undefined;
     if (agents) deps.agent?.onManagerReady?.(agents);
     const push = deps.push ? new PushManager(deps.store, deps.push.runner, { specFor }) : undefined;
+    if (push) lifecycle.pushBusy = () => push.isPushingAny();
     if (push) void push.recover().catch((err) => console.error('push recovery failed:', err));
     syncRoutes(app, deps, sync, agents, push);
     if (agents) agentRoutes(app, deps, agents, sync, push);

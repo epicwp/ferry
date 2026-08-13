@@ -9,7 +9,9 @@ import { sdkRunner } from './agent/sdk-runner.js';
 import { ChangeService, type CreateChangeInput } from './changes.js';
 import { applyEnvFile } from './env-file.js';
 import { realEngine, realPushRunner } from './engine.js';
+import { Lifecycle } from './lifecycle.js';
 import { buildPluginZip } from './plugin-zip.js';
+import { gracefulShutdown, HARD_DEADLINE_MS } from './shutdown.js';
 import { Store } from './store.js';
 
 // Optional git-ignored .env at the repo root (ANTHROPIC_API_KEY etc.); shell env wins.
@@ -67,6 +69,7 @@ if (!agentDepsForMain) {
 
 const pluginDir = fileURLToPath(new URL('../../ferry-plugin', import.meta.url));
 const distDir = fileURLToPath(new URL('../../ferry-dashboard/dist', import.meta.url));
+const lifecycle = new Lifecycle();
 const app = buildApp({
   store,
   engine: realEngine(),
@@ -74,6 +77,7 @@ const app = buildApp({
   staticDir: existsSync(distDir) ? distDir : undefined,
   agent: agentDepsForMain,
   push: { runner: realPushRunner() },
+  lifecycle,
 });
 
 const port = Number(process.env.PORT ?? 4000);
@@ -83,3 +87,16 @@ if (recovered > 0) {
   console.log(`  ${recovered} interrupted sync(s) marked as error after restart`);
 }
 console.log(existsSync(distDir) ? '  serving dashboard from ferry-dashboard/dist' : '  no dashboard build found — dev mode is `npm --workspace ferry-dashboard run dev`');
+
+let shutdownStarted = false;
+const shutdown = (signal: NodeJS.Signals): void => {
+  if (shutdownStarted) process.exit(130); // second signal: immediate
+  shutdownStarted = true;
+  console.log(`${signal} — shutting down (press again to force-exit).`);
+  const deadline = setTimeout(() => process.exit(1), HARD_DEADLINE_MS);
+  deadline.unref();
+  clearInterval(purgeTimer);
+  void gracefulShutdown({ app, store, lifecycle }).then(() => process.exit(0));
+};
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

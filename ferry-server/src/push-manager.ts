@@ -40,6 +40,11 @@ export class PushManager {
     return this.pushing.has(siteId);
   }
 
+  /** Any site mid-push/rollback/recovery — the shutdown drain waits on this. */
+  isPushingAny(): boolean {
+    return this.pushing.size > 0;
+  }
+
   subscribe(siteId: number, fn: Listener): () => void {
     let set = this.listeners.get(siteId);
     if (!set) {
