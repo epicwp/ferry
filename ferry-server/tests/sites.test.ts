@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makeApp, signup } from './helpers/testApp.js';
+import { makeApp, signup, stubEngine } from './helpers/testApp.js';
 
 describe('site routes', () => {
   it('creates a site with derived slug and lists it', async () => {
@@ -42,5 +42,25 @@ describe('site routes', () => {
     expect(res.statusCode).toBe(200);
     res = await app.inject({ method: 'GET', url: '/api/sites' });
     expect(res.statusCode).toBe(401);
+  });
+
+  it('rate-limits pairing to 5 attempts per site and stops calling the site', async () => {
+    let linkCalls = 0;
+    const engine = stubEngine({
+      link: () => { linkCalls++; return Promise.reject(new Error('Invalid or expired pairing code.')); },
+    });
+    const { app } = makeApp({ engine });
+    const cookie = await signup(app);
+    const created = await app.inject({ method: 'POST', url: '/api/sites', headers: { cookie }, payload: { name: 'S', url: 'https://example.com' } });
+    const siteId = created.json().id as number;
+    for (let i = 0; i < 5; i++) {
+      const res = await app.inject({ method: 'POST', url: `/api/sites/${siteId}/pair`, headers: { cookie }, payload: { code: 'AAAA-AAAA' } });
+      expect(res.statusCode).toBe(400); // engine.link rejected — attempt consumed
+    }
+    const limited = await app.inject({ method: 'POST', url: `/api/sites/${siteId}/pair`, headers: { cookie }, payload: { code: 'AAAA-AAAA' } });
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json()).toEqual({ error: 'Too many pairing attempts. Try again later.' });
+    expect(limited.headers['retry-after']).toBeDefined();
+    expect(linkCalls).toBe(5);
   });
 });

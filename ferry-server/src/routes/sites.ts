@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { MultisiteError } from '../../../ferry-cli/src/link.js';
 import { slugFromUrl } from '../../../ferry-cli/src/profile.js';
+import { RateLimiter } from '../rate-limit.js';
 import type { AppDeps } from '../app.js';
 import type { Site } from '../store.js';
 
@@ -50,6 +51,10 @@ export function siteRoutes(app: FastifyInstance, deps: AppDeps): void {
   const engine = deps.engine;
   if (!engine) return; // app built without an engine (store-only tests)
 
+  // Spec 6a §3.4: every pair attempt drives a real outbound HTTP request to the
+  // operator-supplied site.url — cap the pump per site.
+  const pairLimiter = new RateLimiter(5, 10 * 60_000);
+
   app.post('/api/sites/:id/pair', { preHandler: app.requireUser }, async (request, reply) => {
     const site = deps.store.siteFor(request.user.id, Number((request.params as { id: string }).id));
     if (!site) return reply.code(404).send({ error: 'Site not found.' });
@@ -59,6 +64,10 @@ export function siteRoutes(app: FastifyInstance, deps: AppDeps): void {
     const { code } = (request.body ?? {}) as { code?: string };
     if (!code || code.trim() === '') {
       return reply.code(400).send({ error: 'Enter the pairing code shown by the plugin.' });
+    }
+    const retry = pairLimiter.hit(`pair:${site.id}`);
+    if (retry !== null) {
+      return reply.code(429).header('retry-after', String(retry)).send({ error: 'Too many pairing attempts. Try again later.' });
     }
     try {
       await engine.link(site.url, code.trim());
