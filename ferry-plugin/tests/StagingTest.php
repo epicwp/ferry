@@ -143,4 +143,16 @@ final class StagingTest extends TestCase
         $this->assertSame(['error' => 'ferry_bad_txid'], $result);
         $this->assertDirectoryDoesNotExist($this->root . '/wp-content/uploads/.ferry-staging');
     }
+
+    public function test_resumed_batch_refreshes_the_staging_dir_mtime(): void
+    {
+        $txid = str_repeat('a', 32);
+        Staging::add($this->root, $txid, []);
+        $dir = Staging::dir($this->root, $txid);
+        touch($dir, time() - 40 * 86400); // aged past the 30-day retention
+        clearstatcache();
+        Staging::add($this->root, $txid, []); // resumed batch
+        clearstatcache();
+        $this->assertGreaterThan(time() - 60, filemtime($dir), 'resumed batch must refresh the prune clock');
+    }
 }

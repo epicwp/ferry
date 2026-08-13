@@ -43,7 +43,7 @@ final class Excludes
             return true;
         }
         foreach (self::PREFIXES as $prefix) {
-            if (strpos($relpath, $prefix) === 0) {
+            if (stripos($relpath, $prefix) === 0) {
                 return true;
             }
         }

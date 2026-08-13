@@ -76,6 +76,10 @@ final class Staging
 
         file_put_contents($manifest_path, (string) json_encode($manifest));
 
+        // Issue #9: refresh the prune clock on every batch — a multi-batch stage resumed
+        // near the 30-day retention edge must not lose its directory mid-transaction.
+        touch($dir);
+
         return ['staged' => $staged, 'rejected' => $rejected];
     }
 }
