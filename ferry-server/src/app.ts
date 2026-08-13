@@ -70,6 +70,17 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     defaultJsonParser(request, body, done);
   });
 
+  // Spec 6a §3.1: a 500 must never carry err.message to the client. 4xx (validation,
+  // malformed JSON, deliberate throws) keep their message — those are curated.
+  app.setErrorHandler((err: Error & { statusCode?: number }, request, reply) => {
+    const status = err.statusCode ?? 500;
+    if (status < 500) {
+      return reply.code(status).send({ error: err.message });
+    }
+    console.error(`${request.method} ${request.url} → 500:`, err);
+    return reply.code(500).send({ error: 'Internal server error' });
+  });
+
   // Session gate for everything private. Routes opt in via { preHandler: app.requireUser }.
   const requireUser = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const token = request.cookies[SESSION_COOKIE];
