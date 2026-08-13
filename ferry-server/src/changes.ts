@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { runGit } from '../../ferry-cli/src/git.js';
 import { writeJournal } from '../../ferry-cli/src/journal.js';
 import type { ChangeFile, DbOp, Precondition, SmokeCheck } from '../../ferry-cli/src/push-types.js';
+import { isRefusedBareTable, stripTablePrefix } from '../../ferry-cli/src/refusals.js';
 import type { Change, Site, Store } from './store.js';
 
 const execFileP = promisify(execFile);
@@ -24,21 +25,10 @@ export interface CreateChangeInput {
   smoke: SmokeCheck[];
 }
 
-// Mirrors Task 10's classify() refusal list (ferry-cli/src/journal.ts) and DbOps.php's
+// Mirrors classify()'s refusal check (ferry-cli/src/journal.ts) and DbOps.php's
 // REFUSED_TABLES/REFUSED_PATTERNS: content tables never travel through a change card, even if
-// the agent's tool call somehow smuggled one in - never trust tool input.
-const REFUSED_TABLES = new Set(['posts', 'comments', 'commentmeta', 'users', 'usermeta']);
-const REFUSED_PREFIXES = ['woocommerce_', 'wc_', 'actionscheduler_'];
-
-/** `prefix` is the site's actual table prefix (not always `wp_` - hardening installs often
- *  rename it), and both sides are lowercased before comparing since MySQL table names are
- *  case-insensitive on the usual case-insensitive collations/filesystems. */
-function isRefusedTable(table: string, prefix: string): boolean {
-  const lowerTable = table.toLowerCase();
-  const lowerPrefix = prefix.toLowerCase();
-  const stripped = lowerTable.startsWith(lowerPrefix) ? lowerTable.slice(lowerPrefix.length) : lowerTable;
-  return REFUSED_TABLES.has(stripped) || REFUSED_PREFIXES.some((p) => stripped.startsWith(p));
-}
+// the agent's tool call somehow smuggled one in - never trust tool input. Shared source:
+// ferry-cli/src/refusals.ts.
 
 const VALID_OP_KINDS = new Set([
   'option_set', 'option_delete', 'postmeta_set', 'postmeta_delete',
@@ -56,7 +46,7 @@ function validateOps(ops: DbOp[], prefix: string): void {
     if (kind === 'row_update' || kind === 'row_insert' || kind === 'row_delete') {
       const table = r.table;
       if (typeof table !== 'string' || table === '') throw new Error(`invalid_op: ${kind}`);
-      if (isRefusedTable(table, prefix)) throw new Error(`refused_op: ${table}`);
+      if (isRefusedBareTable(stripTablePrefix(table, prefix))) throw new Error(`refused_op: ${table}`);
     }
   }
 }
