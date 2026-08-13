@@ -212,7 +212,7 @@ final class Commit
      * A retry only ever acts on the files still in state (a), so it converges regardless of
      * how far a prior attempt got.
      *
-     * @return array{rolled_back:bool, conflicts:array, denied?:array}
+     * @return array{rolled_back:bool, conflicts:array, denied?:array, apply_error?:array}
      */
     public static function rollback(string $root, $wpdb, string $txid, array $ops): array
     {
@@ -225,6 +225,14 @@ final class Commit
         if (!is_array($meta)) {
             $meta = [];
         }
+
+        if (($meta['status'] ?? null) === 'rolled_back') {
+            // Idempotency (issue #9): a fully-succeeded rollback must not re-run — the
+            // inverse ops' CAS expectations no longer hold and would wedge this record
+            // to rolling_back/dirty. Nothing to do is success.
+            return ['rolled_back' => true, 'conflicts' => []];
+        }
+
         $files = isset($meta['files']) && is_array($meta['files']) ? $meta['files'] : [];
         $backupDir = Staging::backup_dir($root, $txid);
 
@@ -285,7 +293,11 @@ final class Commit
             // Files are already correctly restored - that was never wrong, so it stands.
             // Meta stays "rolling_back" (not reset to "committed"): a retry re-checks every
             // file (all satisfied now, nothing pending) and just re-attempts the DB step.
-            return ['rolled_back' => false, 'conflicts' => $dbResult['conflicts']];
+            $response = ['rolled_back' => false, 'conflicts' => $dbResult['conflicts']];
+            if (isset($dbResult['apply_error'])) {
+                $response['apply_error'] = $dbResult['apply_error'];
+            }
+            return $response;
         }
 
         $meta['status'] = 'rolled_back';

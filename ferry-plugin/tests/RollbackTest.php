@@ -359,4 +359,38 @@ final class RollbackTest extends TestCase
         $this->assertSame('b-original', file_get_contents($this->root . '/wp-content/plugins/p/b.css'));
         $this->assertSame('rolled_back', Tx::read($this->root, $this->txid)['status']);
     }
+
+    // ---- 6a: a second rollback after full success is a no-op success, not a dirty wedge ----
+
+    public function test_second_rollback_after_success_is_idempotent(): void
+    {
+        $this->commitModifyAndCreate();
+        $inverseOps = [['kind' => 'option_set', 'name' => 'ferry_a', 'old' => '2', 'new' => '1']];
+        $first = Commit::rollback($this->root, new FakeWpdb([['option_value' => '2']]), $this->txid, $inverseOps);
+        $this->assertTrue($first['rolled_back'], 'fixture: first rollback must succeed');
+
+        // Second call: the inverse ops' CAS expectations no longer hold (DB now has the OLD
+        // values) — without the early-return this wedges meta to rolling_back/dirty.
+        $second = Commit::rollback($this->root, new FakeWpdb([['option_value' => '1']]), $this->txid, $inverseOps);
+        $this->assertTrue($second['rolled_back']);
+        $this->assertSame([], $second['conflicts']);
+        $this->assertSame('rolled_back', $this->meta()['status']);
+    }
+
+    // ---- 6a: DB apply failure during rollback surfaces apply_error like commit does ----
+
+    public function test_rollback_db_apply_failure_carries_apply_error(): void
+    {
+        $this->commitModifyAndCreate();
+        $inverseOps = [['kind' => 'option_set', 'name' => 'ferry_a', 'old' => '2', 'new' => '1']];
+        $wpdb = new FakeWpdb([['option_value' => '2']]); // read-set CAS passes...
+        $wpdb->fail_writes = true;                        // ...but the write itself fails
+
+        $result = Commit::rollback($this->root, $wpdb, $this->txid, $inverseOps);
+
+        $this->assertFalse($result['rolled_back']);
+        $this->assertSame([], $result['conflicts']);
+        $this->assertArrayHasKey('apply_error', $result);
+        $this->assertSame('option_set apply failed', $result['apply_error']['detail']);
+    }
 }

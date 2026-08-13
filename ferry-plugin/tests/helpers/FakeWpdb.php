@@ -27,6 +27,11 @@ final class FakeWpdb
     /** @var int */
     private $query_call_count = 0;
 
+    /** @var bool when true, every query() call returns false, simulating a failed write
+     *  statement (DbOps::apply routes INSERT/UPDATE/DELETE through query()). Read paths
+     *  (get_row/get_results/get_var/get_col) are untouched. */
+    public $fail_writes = false;
+
     public function __construct(array $script = [])
     {
         $this->script = $script;
@@ -66,7 +71,7 @@ final class FakeWpdb
                 }
             }
         }
-        if ($this->fail_query_at_call === $call) {
+        if ($this->fail_writes || $this->fail_query_at_call === $call) {
             return false;
         }
         return 0;
