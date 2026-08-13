@@ -193,6 +193,25 @@ describe('ChangeService', () => {
     expect(store.changesFor(site.id)).toEqual([]);
   });
 
+  // ---- Task 12: pk / new[pkCol] cross-check ----
+
+  it('throws pk_mismatch when a row op\'s new[pkCol] disagrees with pk, before touching the clone', async () => {
+    const input = validInput({
+      ops: [{ kind: 'row_insert', table: 'wp_custom', pkCol: 'id', pk: 7, new: { id: 8 } } as unknown as DbOp],
+    });
+    await expect(service.create(site, input)).rejects.toThrow('pk_mismatch: wp_custom');
+    expect(git(cloneDir, 'status', '--porcelain')).toBe('');
+    expect(store.changesFor(site.id)).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it('accepts a row op whose new[pkCol] agrees with pk as a numeric string (binlog values are strings)', async () => {
+    const input = validInput({
+      ops: [{ kind: 'row_insert', table: 'wp_custom', pkCol: 'id', pk: 7, new: { id: '7' } }],
+    });
+    await expect(service.create(site, input)).resolves.toMatchObject({ status: 'draft' });
+  });
+
   // ---- final-review fix 8: a smoke check path must be relative, not an absolute URL ----
 
   it('throws invalid_smoke for a smoke check with an absolute URL path (SSRF guard)', async () => {

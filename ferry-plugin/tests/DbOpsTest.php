@@ -98,6 +98,31 @@ final class DbOpsTest extends TestCase
         $this->assertSame([['index' => 0, 'reason' => 'bad_identifier']], $result['refused']);
     }
 
+    // ---- Task 12: pk / new[pkCol] cross-check ----
+
+    public function test_row_op_with_mismatched_new_pk_is_refused(): void
+    {
+        $ops = [['kind' => 'row_insert', 'table' => 'wp_custom', 'pkCol' => 'id', 'pk' => 7, 'new' => ['id' => '8', 'label' => 'x']]];
+        $result = Ferry\DbOps::validate($ops, 'wp_');
+        $this->assertSame([], $result['ok']);
+        $this->assertSame('pk_mismatch', $result['refused'][0]['reason']);
+    }
+
+    public function test_row_op_with_matching_string_pk_passes(): void
+    {
+        $ops = [['kind' => 'row_insert', 'table' => 'wp_custom', 'pkCol' => 'id', 'pk' => 7, 'new' => ['id' => '7', 'label' => 'x']]];
+        $result = Ferry\DbOps::validate($ops, 'wp_');
+        $this->assertSame([], $result['refused']); // binlog values are strings — '7' agrees with 7
+    }
+
+    public function test_row_update_with_mismatched_old_pk_is_refused(): void
+    {
+        $ops = [['kind' => 'row_update', 'table' => 'wp_custom', 'pkCol' => 'id', 'pk' => 7,
+                 'old' => ['id' => '9', 'label' => 'a'], 'new' => ['id' => '7', 'label' => 'b']]];
+        $result = Ferry\DbOps::validate($ops, 'wp_');
+        $this->assertSame('pk_mismatch', $result['refused'][0]['reason']);
+    }
+
     // ---- apply_in_transaction() happy path ----
 
     public function test_happy_path_records_exact_sql_sequence_and_commits(): void

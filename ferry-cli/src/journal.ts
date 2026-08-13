@@ -112,6 +112,7 @@ function buildRowOp(ev: RawRowEvent): DbOp | { unsupportedPk: true } {
   if (ev.pkCols.length !== 1) return { unsupportedPk: true }; // composite key or no PK found
   const pkCol = ev.pkCols[0];
   const row = ev.after ?? ev.before!;
+  // pk is read from row[pkCol] itself — op.pk and new/old[pkCol] agree by construction.
   const pk = Number(row[pkCol]);
   if (!Number.isFinite(pk)) return { unsupportedPk: true }; // varchar/UUID/null key
   if (ev.kind === 'insert') {

@@ -47,6 +47,17 @@ function validateOps(ops: DbOp[], prefix: string): void {
       const table = r.table;
       if (typeof table !== 'string' || table === '') throw new Error(`invalid_op: ${kind}`);
       if (isRefusedBareTable(stripTablePrefix(table, prefix))) throw new Error(`refused_op: ${table}`);
+
+      const pkCol = r.pkCol;
+      if (typeof pkCol === 'string') {
+        for (const side of ['new', 'old'] as const) {
+          const row = r[side];
+          if (row && typeof row === 'object' && pkCol in (row as Record<string, unknown>)) {
+            const value = (row as Record<string, unknown>)[pkCol];
+            if (Number(value) !== Number(r.pk)) throw new Error(`pk_mismatch: ${table}`);
+          }
+        }
+      }
     }
   }
 }
