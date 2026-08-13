@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import type { ChangeFile, Conflict, DbOp, Precondition, SmokeCheck } from '../../ferry-cli/src/push-types.js';
+import type { ChangeFile, Conflict, DbOp, Precondition, SmokeCheck, SmokeResult } from '../../ferry-cli/src/push-types.js';
 
 export interface User { id: number; email: string; passwordHash: string }
 
@@ -57,6 +57,7 @@ export interface Change {
   backupTxid: string | null;
   prodRef: string | null;
   conflict: Conflict[] | null;
+  smokeResult: SmokeResult[] | null;
   createdAt: string;
   pushedAt: string | null;
   rolledBackAt: string | null;
@@ -79,6 +80,7 @@ export interface SetChangeStatusPatch {
   backupTxid?: string | null;
   prodRef?: string | null;
   conflict?: Conflict[] | null;
+  smokeResult?: SmokeResult[] | null;
   pushedAt?: string;
   rolledBackAt?: string;
 }
@@ -186,6 +188,7 @@ interface ChangeRow {
   base_sha: string; head_sha: string; diff_text: string;
   files_json: string; ops_json: string; preconditions_json: string; smoke_json: string;
   backup_txid: string | null; prod_ref: string | null; conflict_json: string | null;
+  smoke_result_json: string | null;
   created_at: string; pushed_at: string | null; rolled_back_at: string | null;
 }
 
@@ -219,6 +222,7 @@ function toChange(row: ChangeRow): Change {
     smoke: JSON.parse(row.smoke_json) as SmokeCheck[],
     backupTxid: row.backup_txid, prodRef: row.prod_ref,
     conflict: row.conflict_json ? (JSON.parse(row.conflict_json) as Conflict[]) : null,
+    smokeResult: row.smoke_result_json ? (JSON.parse(row.smoke_result_json) as SmokeResult[]) : null,
     createdAt: row.created_at, pushedAt: row.pushed_at, rolledBackAt: row.rolled_back_at,
   };
 }
@@ -230,6 +234,10 @@ export class Store {
     this.db = new Database(path);
     this.db.pragma('journal_mode = WAL');
     this.db.exec(SCHEMA);
+    const changeCols = this.db.prepare('PRAGMA table_info(changes)').all() as { name: string }[];
+    if (!changeCols.some((c) => c.name === 'smoke_result_json')) {
+      this.db.exec('ALTER TABLE changes ADD COLUMN smoke_result_json TEXT');
+    }
   }
 
   close(): void {
@@ -436,6 +444,9 @@ export class Store {
     }
     if ('conflict' in patch) {
       this.db.prepare('UPDATE changes SET conflict_json = ? WHERE id = ?').run(patch.conflict ? JSON.stringify(patch.conflict) : null, id);
+    }
+    if ('smokeResult' in patch) {
+      this.db.prepare('UPDATE changes SET smoke_result_json = ? WHERE id = ?').run(patch.smokeResult ? JSON.stringify(patch.smokeResult) : null, id);
     }
     if (patch.pushedAt !== undefined) {
       this.db.prepare('UPDATE changes SET pushed_at = ? WHERE id = ?').run(patch.pushedAt, id);

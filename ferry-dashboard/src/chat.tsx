@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useLocation } from 'react-router-dom';
 import { agentHistory, agentNewSession, agentSend, ApiError, type AgentWireEvent } from './api';
+import { InlineChangeCard } from './change-parts';
 
 type ConnState = 'connecting' | 'live' | 'lost';
 
@@ -9,8 +11,9 @@ type Block =
   | { kind: 'user'; key: string; text: string }
   | { kind: 'agent'; key: string; text: string }
   | { kind: 'tools'; key: string; rows: ToolRow[] }
-  | { kind: 'status'; key: string; text: string }
-  | { kind: 'turn_end'; key: string; text: string };
+  | { kind: 'status'; key: string; text: string; isError?: boolean }
+  | { kind: 'turn_end'; key: string; text: string }
+  | { kind: 'change_card'; key: string; changeSeq: number; title: string; status: string };
 
 const ERROR_SUBTYPES = new Set(['error_max_turns', 'error_max_budget_usd', 'error_during_execution']);
 
@@ -57,7 +60,11 @@ function buildBlocks(events: AgentWireEvent[]): Block[] {
       }
       case 'status':
         flushTools();
-        blocks.push({ kind: 'status', key, text: String(event.payload.detail ?? event.payload.state ?? '') });
+        blocks.push({
+          kind: 'status', key,
+          text: String(event.payload.detail ?? event.payload.state ?? ''),
+          isError: event.payload.state === 'error',
+        });
         break;
       case 'turn_end': {
         const subtype = String(event.payload.subtype ?? '');
@@ -71,6 +78,15 @@ function buildBlocks(events: AgentWireEvent[]): Block[] {
         }
         break;
       }
+      case 'change_card':
+        flushTools();
+        blocks.push({
+          kind: 'change_card', key,
+          changeSeq: Number(event.payload.seq ?? 0), // the CHANGE seq, not the wire seq
+          title: String(event.payload.title ?? ''),
+          status: String(event.payload.status ?? ''),
+        });
+        break;
       default:
         break;
     }
@@ -80,10 +96,11 @@ function buildBlocks(events: AgentWireEvent[]): Block[] {
 }
 
 export function AgentChat({ siteId }: { siteId: number }) {
+  const location = useLocation();
   const [events, setEvents] = useState<AgentWireEvent[]>([]);
   const [streamText, setStreamText] = useState('');
   const [conn, setConn] = useState<ConnState>('connecting');
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState(() => (location.state as { prefill?: string } | null)?.prefill ?? '');
   const [sendError, setSendError] = useState('');
   const esRef = useRef<EventSource | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -193,8 +210,23 @@ export function AgentChat({ siteId }: { siteId: number }) {
               </div>
             );
           }
+          if (block.kind === 'change_card') {
+            return (
+              <InlineChangeCard
+                key={block.key}
+                siteId={siteId}
+                changeSeq={block.changeSeq}
+                title={block.title}
+                status={block.status}
+              />
+            );
+          }
           if (block.kind === 'status') {
-            return <div key={block.key} className="chat__status mono">{block.text}</div>;
+            return (
+              <div key={block.key} className={block.isError ? 'chat__status chat__status--error mono' : 'chat__status mono'}>
+                {block.text}
+              </div>
+            );
           }
           return <div key={block.key} className="chat__status chat__status--error mono">{block.text}</div>;
         })}

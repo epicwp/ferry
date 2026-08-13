@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PullProgress, PullResult } from '../../ferry-cli/src/pull.js';
 import { SyncManager, type SyncState } from '../src/sync.js';
-import { Store } from '../src/store.js';
+import { Store, type Site } from '../src/store.js';
 import { makeApp, signup, stubEngine } from './helpers/testApp.js';
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: Error) => void } {
@@ -17,12 +17,12 @@ const RESULT: PullResult = {
   provenance: { reportPath: '/tmp/r.json', summary: 'ok', reused: 0, reconstructed: 0, fetched: 2 },
 };
 
-function setup(engineOverrides: Parameters<typeof stubEngine>[0]) {
+function setup(engineOverrides: Parameters<typeof stubEngine>[0], opts?: ConstructorParameters<typeof SyncManager>[2]) {
   const store = new Store(':memory:');
   const user = store.createUser('a@example.com', 'h')!;
   const site = store.createSite(user.id, 'S', 'https://klant.nl', 'klant-nl')!;
   store.setStatus(site.id, 'paired');
-  const sync = new SyncManager(store, stubEngine(engineOverrides));
+  const sync = new SyncManager(store, stubEngine(engineOverrides), opts);
   return { store, user, site: store.siteFor(user.id, site.id)!, sync };
 }
 
@@ -148,6 +148,43 @@ describe('SyncManager', () => {
     const refreshed = store.siteFor(user.id, site.id)!;
     expect(refreshed.status).toBe('ready');
     unsubscribe();
+  });
+});
+
+describe('SyncManager afterReady hook', () => {
+  it('calls afterReady with the site after a successful sync', async () => {
+    const calls: Site[] = [];
+    const { site, sync } = setup(
+      { pull: async () => RESULT, verifyClone: async () => ({ ok: true }) },
+      { afterReady: async (s) => { calls.push(s); } },
+    );
+    sync.start(site);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls).toEqual([site]);
+  });
+
+  it('does not call afterReady after a failed sync', async () => {
+    const calls: Site[] = [];
+    const { store, user, site, sync } = setup(
+      { pull: async () => { throw new Error('manifest made no progress - aborting'); } },
+      { afterReady: async (s) => { calls.push(s); } },
+    );
+    sync.start(site);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls).toHaveLength(0);
+    expect(store.siteFor(user.id, site.id)!.status).toBe('error');
+  });
+
+  it('still ends ready when afterReady throws', async () => {
+    const { site, sync } = setup(
+      { pull: async () => RESULT, verifyClone: async () => ({ ok: true }) },
+      { afterReady: async () => { throw new Error('hook failed'); } },
+    );
+    const seen: SyncState[] = [];
+    sync.subscribe(site, (s) => seen.push(s));
+    sync.start(site);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(seen.at(-1)!.status).toBe('ready');
   });
 });
 

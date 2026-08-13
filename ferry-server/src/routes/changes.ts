@@ -45,11 +45,13 @@ export function changesRoutes(
     if (!change) return reply.code(404).send({ error: 'Change not found.' });
     // Same guard trio as sync.ts: sync running, agent mid-turn, another push already running.
     if (sync.isRunning(site.id)) return reply.code(409).send({ error: 'A sync is running for this site.' });
-    if (agents?.isActive(site.id)) {
+    if (agents?.isMidTurn(site.id)) {
       return reply.code(409).send({ error: 'The agent is working on this site — finish or start a new session first.' });
     }
-    if (change.status !== 'draft') return reply.code(409).send({ error: 'Only a draft change can be pushed.' });
     const force = !!(request.body as { force?: boolean } | undefined)?.force;
+    // Screen 11's Force action pushes a conflicted change; anything else stays draft-only.
+    const pushable = change.status === 'draft' || (change.status === 'conflict' && force);
+    if (!pushable) return reply.code(409).send({ error: 'Only a draft change can be pushed.' });
     try {
       push.start(site, change, { force });
     } catch (err) {
@@ -104,6 +106,24 @@ export function changesRoutes(
     if (!agents) return reply.code(409).send({ error: 'Agent chat is not available.' });
     await agents.send(site, conflictMessage(change));
     return reply.code(202).send({ queued: true });
+  });
+
+  app.get('/api/sites/:id/changes/:seq/drift', { preHandler: app.requireUser }, async (request, reply) => {
+    const site = deps.store.siteFor(request.user.id, Number((request.params as { id: string }).id));
+    if (!site) return reply.code(404).send({ error: 'Site not found.' });
+    const seq = Number((request.params as { seq: string }).seq);
+    const change = deps.store.changeBySeq(site.id, seq);
+    if (!change) return reply.code(404).send({ error: 'Change not found.' });
+    if (change.status !== 'draft') return reply.code(409).send({ error: 'Only a draft change has a drift preview.' });
+    const runner = deps.push?.runner;
+    if (!runner?.hashes) return reply.code(502).send({ error: 'Drift preview is not available.' });
+    try {
+      const hashes = await runner.hashes(site.slug, change.files.map((f) => f.path));
+      const mismatches = change.files.filter((f) => (hashes[f.path] ?? null) !== f.oldHash).map((f) => f.path);
+      return reply.send({ checked: change.files.length, mismatches });
+    } catch {
+      return reply.code(502).send({ error: 'Could not reach the site for a drift check.' });
+    }
   });
 
   app.get('/api/sites/:id/push/events', { preHandler: app.requireUser }, async (request, reply) => {

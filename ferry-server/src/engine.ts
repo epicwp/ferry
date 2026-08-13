@@ -102,5 +102,12 @@ export function realPushRunner(): PushRunner {
       const { data } = await client.getJson('/ferry/v1/tx', { txid });
       return data.status as 'committed' | 'dirty' | 'staged' | 'rolled_back' | 'unknown';
     },
+    async hashes(slug, paths) {
+      const profile = loadProfile(slug);
+      const client = new FerryClient(profile.url, profile.secret);
+      await client.syncClock();
+      const { data } = await client.postJson('/ferry/v1/hashes', { paths });
+      return data.hashes as Record<string, string | null>;
+    },
   };
 }

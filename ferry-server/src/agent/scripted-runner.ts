@@ -16,6 +16,11 @@ export function scriptedRunner(): AgentRunner {
       emit({ type: 'sdk_session', sdkSessionId }, 0);
       return {
         send(text: string): void {
+          if (text === 'trigger-runner-error') {
+            // e2e hook: exercise the runner_error → status{state:'error'} path without an SDK.
+            emit({ type: 'runner_error', message: 'API Error: 401 (scripted)' }, 10);
+            return;
+          }
           emit({ type: 'text_delta', text: 'Looking' }, 10);
           emit({ type: 'text_delta', text: ' into it…' }, 20);
           emit({ type: 'tool_use', toolUseId: 'tu-1', name: 'Grep', input: '{"pattern":"calculate_tax"}' }, 30);

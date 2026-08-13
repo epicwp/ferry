@@ -121,6 +121,7 @@ export class PushManager {
       case 'pushed':
         this.store.setChangeStatus(change.id, 'pushed', {
           backupTxid: outcome.txid, prodRef: outcome.txid.slice(0, 7), pushedAt: now,
+          smokeResult: outcome.smoke,
         });
         break;
       case 'conflict':
@@ -128,7 +129,7 @@ export class PushManager {
         break;
       case 'rolled_back':
         // The real push() already ran the automatic rollback before this outcome reached us.
-        this.store.setChangeStatus(change.id, 'rolled_back', { rolledBackAt: now });
+        this.store.setChangeStatus(change.id, 'rolled_back', { rolledBackAt: now, smokeResult: outcome.smoke ?? null });
         break;
       case 'error':
         if (outcome.detail.startsWith(ROLLBACK_FAILED_PREFIX)) {

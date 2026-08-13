@@ -33,6 +33,14 @@ export class AgentManager {
     return this.hot.has(siteId);
   }
 
+  /** True only while a turn is actually running (spec: sync, agent TURN and push are pairwise
+   *  exclusive) — a hot-but-idle SDK subprocess doesn't touch the site, so it must not block
+   *  the chat → card → push flow. Session status is set 'running' on send() and cleared on
+   *  turn_end/runner_error; boot recovery resets stuck 'running' rows. */
+  isMidTurn(siteId: number): boolean {
+    return this.store.currentAgentSession(siteId)?.status === 'running';
+  }
+
   subscribe(siteId: number, fn: Listener): () => void {
     let set = this.listeners.get(siteId);
     if (!set) {

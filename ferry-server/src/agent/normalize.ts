@@ -31,12 +31,34 @@ export function normalizeSdkMessage(msg: unknown): RunnerEvent[] {
     return [{ type: 'sdk_session', sdkSessionId: m.session_id }];
   }
   if (m.type === 'assistant') {
+    // Check structured error field first (sdk.d.ts:2858 SDKAssistantMessage.error?: SDKAssistantMessageError)
+    if (typeof m.error === 'string' && m.error !== '') {
+      const content = m.message?.content;
+      let firstText = '';
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block?.type === 'text' && typeof block.text === 'string' && block.text !== '') {
+            firstText = block.text;
+            break;
+          }
+        }
+      }
+      const message = firstText ? `API error (${m.error}): ${firstText}` : `API error (${m.error})`;
+      return [{ type: 'runner_error', message }];
+    }
+
     const out: RunnerEvent[] = [];
     const content = m.message?.content;
     if (Array.isArray(content)) {
       for (const block of content) {
         if (block?.type === 'text' && typeof block.text === 'string' && block.text !== '') {
-          out.push({ type: 'agent_text', text: block.text });
+          // The SDK surfaces API failures (401s etc.) as a synthetic assistant message rather
+          // than throwing — without this branch they render as ordinary agent prose (issue #9).
+          if (/^API Error\b/.test(block.text)) {
+            out.push({ type: 'runner_error', message: block.text });
+          } else {
+            out.push({ type: 'agent_text', text: block.text });
+          }
         } else if (block?.type === 'tool_use') {
           out.push({
             type: 'tool_use', toolUseId: String(block.id ?? ''), name: String(block.name ?? ''),

@@ -163,4 +163,60 @@ test('3b gate: sign up → add site → pair → watch progress → ready in the
   await page.getByRole('button', { name: 'Start a new session' }).click();
   await expect(page.getByText(/Plan: check the tax settings/)).not.toBeVisible();
   await expect(page.getByText('New session started.')).toBeVisible();
+
+  // ---- 5b: runner errors are visible (issue #9) ----
+  await page.getByPlaceholder('Ask a follow-up or request another fix…').fill('trigger-runner-error');
+  await page.getByRole('button', { name: 'Send message' }).click();
+  await expect(page.locator('.chat__status--error')).toContainText('The agent hit an internal error');
+
+  // ---- 5b: inline change card over live SSE ----
+  const siteId = Number(page.url().match(/sites\/(\d+)/)![1]);
+  const seedRes = await page.request.post('/e2e/changes', { data: { siteId, emitCard: true } });
+  expect(seedRes.ok()).toBeTruthy();
+  const seeded = await seedRes.json();
+  await expect(page.locator('.ccard')).toBeVisible();
+  await expect(page.locator('.ccard__title')).toHaveText('VAT calculation fixed');
+  await expect(page.locator('.ccard')).toContainText('2 files changed');
+  await expect(page.locator('.ccard')).toContainText('nothing goes to production automatically');
+  // composer stays usable with the card in the feed
+  await expect(page.getByPlaceholder('Ask a follow-up or request another fix…')).toBeEnabled();
+
+  // replayed from history after a reload
+  await page.reload();
+  await expect(page.locator('.ccard')).toBeVisible();
+
+  // ---- 5b: a failed change-detail fetch degrades honestly, not silently ----
+  await page.route('**/api/sites/*/changes/*', (route) => {
+    const r = route.request();
+    if (r.method() === 'GET' && /\/api\/sites\/\d+\/changes\/\d+$/.test(r.url())) return route.abort();
+    return route.continue();
+  });
+  await page.reload();
+  await expect(page.locator('.ccard__title')).toHaveText('VAT calculation fixed'); // from the event payload, not the failed fetch
+  await expect(page.locator('.ccard')).toContainText("Couldn't load the change details — open it via View diff.");
+  await expect(page.getByRole('link', { name: 'View diff' })).toBeVisible();
+  await page.unroute('**/api/sites/*/changes/*');
+  await page.reload();
+  await expect(page.locator('.ccard')).toContainText('2 files changed'); // healthy again for the sections below
+
+  // View diff navigates to the change page
+  await page.getByRole('link', { name: 'View diff' }).click();
+  await expect(page).toHaveURL(`/sites/${siteId}/changes/${seeded.seq}`);
+  await expect(page.locator('.change-head__title')).toHaveText('VAT calculation fixed');
+  await page.goBack();
+
+  // ---- 5b: the one click, straight from the card (turn-scoped guard, Task 12) ----
+  // The chat session is hot but idle — this must NOT 409.
+  await page.locator('.ccard').getByRole('button', { name: 'Push to production' }).click();
+  await expect(page).toHaveURL(`/sites/${siteId}/changes/${seeded.seq}`);
+  await expect(page.locator('.status-pill--pushed')).toBeVisible({ timeout: 15_000 });
+  await page.goBack();
+
+  // ---- 5b: retry posts the conflict into the chat ----
+  const conflictSeed = await page.request.post('/e2e/changes', { data: { siteId, status: 'conflict' } });
+  const conflictChange = await conflictSeed.json();
+  await page.goto(`/sites/${siteId}/changes/${conflictChange.seq}`);
+  await page.getByRole('button', { name: 'Retry' }).click();
+  await expect(page).toHaveURL(`/sites/${siteId}`);
+  await expect(page.locator('.chat__msg--user').last()).toContainText('hit a conflict');
 });

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { scriptedRunner } from '../src/agent/scripted-runner.js';
-import type { AgentWireEvent } from '../src/agent/types.js';
+import type { AgentRunner, AgentWireEvent } from '../src/agent/types.js';
 import { scriptedPushRunner } from '../src/push/scripted-push-runner.js';
 import type { PushWireEvent } from '../src/push-manager.js';
+import type { StepEvent } from '../src/push/types.js';
 import type { Change } from '../src/store.js';
 import { agentDeps, makeApp, signup, stubEngine } from './helpers/testApp.js';
 
@@ -75,7 +76,7 @@ describe('changes routes', () => {
     expect(store.changeBySeq(site.id, change.seq)!.status).toBe('pushed');
   });
 
-  it('refuses to push while the agent is active on this site (409)', async () => {
+  it('allows a push while the agent session is hot but idle', async () => {
     const { app, store } = makeApp({
       engine: stubEngine(), agent: agentDeps(scriptedRunner()), push: { runner: scriptedPushRunner() },
     });
@@ -84,8 +85,30 @@ describe('changes routes', () => {
     const change = draftChange(store, site.id);
 
     await app.inject({ method: 'POST', url: `/api/sites/${site.id}/agent/messages`, headers: { cookie }, payload: { text: 'hi' } });
+    await until(() => store.currentAgentSession(site.id)?.status === 'idle');
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${change.seq}/push`, headers: { cookie } });
+    expect(res.statusCode).toBe(202);
+  });
+
+  it('refuses a push mid-turn', async () => {
+    const runner: AgentRunner = {
+      start: (_opts) => ({
+        send: () => { /* never emits turn_end - the turn never completes */ },
+        interrupt: async () => undefined,
+        close: async () => undefined,
+      }),
+    };
+    const { app, store } = makeApp({
+      engine: stubEngine(), agent: agentDeps(runner), push: { runner: scriptedPushRunner() },
+    });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const change = draftChange(store, site.id);
+
+    await app.inject({ method: 'POST', url: `/api/sites/${site.id}/agent/messages`, headers: { cookie }, payload: { text: 'hi' } });
     const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${change.seq}/push`, headers: { cookie } });
     expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'The agent is working on this site — finish or start a new session first.' });
   });
 
   it('refuses to push while a sync is running (409)', async () => {
@@ -109,6 +132,42 @@ describe('changes routes', () => {
 
     const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${change.seq}/push`, headers: { cookie } });
     expect(res.statusCode).toBe(409);
+  });
+
+  it('force-pushes a conflicted change', async () => {
+    const base = scriptedPushRunner();
+    let sawForce: boolean | undefined;
+    const runner = {
+      ...base,
+      push: (slug: string, spec: Parameters<typeof base.push>[1], opts: Parameters<typeof base.push>[2]) => {
+        sawForce = opts.force;
+        return base.push(slug, spec, opts);
+      },
+    };
+    const { app, store } = makeApp({ engine: stubEngine(), push: { runner } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const change = draftChange(store, site.id);
+    store.setChangeStatus(change.id, 'conflict', { conflict: [{ key: 'wp_options.blogname', expected: 'A', found: 'C' }] });
+
+    const res = await app.inject({
+      method: 'POST', url: `/api/sites/${site.id}/changes/${change.seq}/push`, headers: { cookie }, payload: { force: true },
+    });
+    expect(res.statusCode).toBe(202);
+    await until(() => store.changeBySeq(site.id, change.seq)!.status !== 'pushing');
+    expect(sawForce).toBe(true);
+  });
+
+  it('refuses a plain push of a conflicted change', async () => {
+    const { app, store } = makeApp({ engine: stubEngine(), push: { runner: scriptedPushRunner() } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const change = draftChange(store, site.id);
+    store.setChangeStatus(change.id, 'conflict', { conflict: [{ key: 'wp_options.blogname', expected: 'A', found: 'C' }] });
+
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${change.seq}/push`, headers: { cookie } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'Only a draft change can be pushed.' });
   });
 
   it('mutually excludes push against sync and agent in the other direction too', async () => {
@@ -248,7 +307,11 @@ describe('changes routes', () => {
     const events = sseEvents<PushWireEvent>(Buffer.concat(chunks).toString('utf8'));
     const seqs = events.map((e) => e.seq);
     expect(new Set(seqs).size).toBe(seqs.length);
-    expect(events.filter((e) => e.type === 'push_step')).toHaveLength(12); // 6 steps x (start + ok)
+    expect(events.filter((e) => e.type === 'push_step')).toHaveLength(13); // 6 steps x (start + ok) + the drift crash-marker start (push.ts:124)
+    const driftStarts = events.filter((e) => e.type === 'push_step')
+      .map((e) => e.payload as StepEvent)
+      .filter((p) => p.step === 'drift' && p.status === 'start');
+    expect(driftStarts).toHaveLength(2); // faithful to the real runner — the UI must dedupe
     expect(events.filter((e) => e.type === 'push_done')).toHaveLength(1);
   });
 
@@ -274,7 +337,63 @@ describe('changes routes', () => {
     const events = sseEvents<PushWireEvent>(Buffer.concat(chunks).toString('utf8'));
     const seqs = events.map((e) => e.seq);
     expect(new Set(seqs).size).toBe(seqs.length);
-    expect(events.filter((e) => e.type === 'push_step')).toHaveLength(12);
+    expect(events.filter((e) => e.type === 'push_step')).toHaveLength(13); // 6 steps x (start + ok) + the drift crash-marker start (push.ts:124)
     expect(events.filter((e) => e.type === 'push_done')).toHaveLength(1);
+  });
+
+  it('previews drift for a draft change', async () => {
+    const { app, store } = makeApp({ engine: stubEngine(), push: { runner: scriptedPushRunner() } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const change = store.createChange(site.id, {
+      ...FIELDS,
+      files: [
+        { path: 'a.php', oldHash: 'scripted-a.php', newHash: 'x' },
+        { path: 'b.php', oldHash: 'wrong', newHash: 'y' },
+      ],
+    });
+
+    const res = await app.inject({ method: 'GET', url: `/api/sites/${site.id}/changes/${change.seq}/drift`, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ checked: 2, mismatches: ['b.php'] });
+  });
+
+  it('refuses a drift preview for a non-draft change (409)', async () => {
+    const { app, store } = makeApp({ engine: stubEngine(), push: { runner: scriptedPushRunner() } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const change = draftChange(store, site.id);
+    store.setChangeStatus(change.id, 'pushed', { pushedAt: new Date().toISOString() });
+
+    const res = await app.inject({ method: 'GET', url: `/api/sites/${site.id}/changes/${change.seq}/drift`, headers: { cookie } });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('502s when the runner cannot reach the site', async () => {
+    const runner = scriptedPushRunner();
+    const { app, store } = makeApp({
+      engine: stubEngine(),
+      push: { runner: { ...runner, hashes: async () => { throw new Error('unreachable'); } } },
+    });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const change = draftChange(store, site.id);
+
+    const res = await app.inject({ method: 'GET', url: `/api/sites/${site.id}/changes/${change.seq}/drift`, headers: { cookie } });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'Could not reach the site for a drift check.' });
+  });
+
+  it('502s when the runner has no drift preview support', async () => {
+    const base = scriptedPushRunner();
+    const runner = { push: base.push, rollback: base.rollback, txStatus: base.txStatus };
+    const { app, store } = makeApp({ engine: stubEngine(), push: { runner } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const change = draftChange(store, site.id);
+
+    const res = await app.inject({ method: 'GET', url: `/api/sites/${site.id}/changes/${change.seq}/drift`, headers: { cookie } });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'Drift preview is not available.' });
   });
 });
