@@ -80,6 +80,13 @@ describe('auth rate limits', () => {
     const res = await app.inject({ method: 'POST', url: '/api/auth/signup', payload: { email: 'u11@example.com', password: 'password1' } });
     expect(res.statusCode).toBe(429);
   });
+
+  it('signup limit is injectable for test servers', async () => {
+    const { app } = makeApp({ authLimits: { signupMax: 1 } });
+    await signup(app); // first attempt consumes the budget of 1
+    const res = await app.inject({ method: 'POST', url: '/api/auth/signup', payload: { email: 'b@example.com', password: 'password1' } });
+    expect(res.statusCode).toBe(429);
+  });
 });
 
 describe('application/json body parsing', () => {

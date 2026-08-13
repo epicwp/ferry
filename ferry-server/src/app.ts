@@ -41,6 +41,8 @@ export interface AppDeps {
   push?: {
     runner: PushRunner;
   };
+  /** Test seam: e2e runs ~17 signups from one IP against one process; production keeps the default. */
+  authLimits?: { signupMax?: number };
 }
 
 function specFor(change: Change): ChangeSpec {

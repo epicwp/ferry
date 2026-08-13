@@ -12,7 +12,7 @@ const LIMIT_BODY = { error: 'Too many attempts. Try again later.' };
 
 export function authRoutes(app: FastifyInstance, deps: AppDeps): void {
   const loginLimiter = new RateLimiter(LOGIN_MAX_FAILURES, AUTH_WINDOW_MS);
-  const signupLimiter = new RateLimiter(SIGNUP_MAX_ATTEMPTS, AUTH_WINDOW_MS);
+  const signupLimiter = new RateLimiter(deps.authLimits?.signupMax ?? SIGNUP_MAX_ATTEMPTS, AUTH_WINDOW_MS);
 
   app.post('/api/auth/signup', async (request, reply) => {
     const { email, password } = (request.body ?? {}) as { email?: string; password?: string };

@@ -54,6 +54,7 @@ const app = buildApp({
     onManagerReady: (m: AgentManager) => { agentManager = m; },
   },
   push: { runner: e2ePushRunner() },
+  authLimits: { signupMax: 10_000 },
 });
 
 // Design-fixture default (screens 6–12 storyline): two files + one option op. oldHash uses the
