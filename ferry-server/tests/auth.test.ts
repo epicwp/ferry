@@ -46,6 +46,42 @@ describe('auth routes', () => {
   });
 });
 
+describe('auth rate limits', () => {
+  it('locks login after 10 failures per account+IP, even with the right password', async () => {
+    const { app } = makeApp();
+    await signup(app); // user@example.com / password1
+    for (let i = 0; i < 10; i++) {
+      const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'user@example.com', password: 'wrong' } });
+      expect(res.statusCode).toBe(401);
+    }
+    const limited = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'user@example.com', password: 'password1' } });
+    expect(limited.statusCode).toBe(429);
+    expect(limited.headers['retry-after']).toBeDefined();
+    expect(limited.json()).toEqual({ error: 'Too many attempts. Try again later.' });
+  });
+
+  it('clears the failure count on successful login', async () => {
+    const { app } = makeApp();
+    await signup(app);
+    for (let i = 0; i < 9; i++) {
+      await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'user@example.com', password: 'wrong' } });
+    }
+    const ok = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'user@example.com', password: 'password1' } });
+    expect(ok.statusCode).toBe(200);
+    const after = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'user@example.com', password: 'wrong' } });
+    expect(after.statusCode).toBe(401); // 401, not 429 — the counter restarted
+  });
+
+  it('limits signup attempts per IP', async () => {
+    const { app } = makeApp();
+    for (let i = 0; i < 10; i++) {
+      await app.inject({ method: 'POST', url: '/api/auth/signup', payload: { email: `u${i}@example.com`, password: 'password1' } });
+    }
+    const res = await app.inject({ method: 'POST', url: '/api/auth/signup', payload: { email: 'u11@example.com', password: 'password1' } });
+    expect(res.statusCode).toBe(429);
+  });
+});
+
 describe('application/json body parsing', () => {
   it('accepts an empty body on a bodyless route (content-type sent, no payload)', async () => {
     const { app } = makeApp();
