@@ -6,6 +6,7 @@ final class Auth
     const CODE_TTL = 600;          // pairing code lifetime, seconds (device flow, SaaS spec §13)
     const SIGNATURE_WINDOW = 60;   // max clock skew for signed requests, seconds (§4.5)
     const CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTVWXYZ'; // no 0/O, 1/I/L, U
+    const MAX_ATTEMPTS = 5;        // failed claims per code; the 5th failure deletes the code
 
     // ---- pairing (WordPress-dependent) ----
 
@@ -35,7 +36,8 @@ final class Auth
         return $pairing;
     }
 
-    /** Single-use exchange: valid code -> fresh secret, code invalidated. Null on failure. */
+    /** Single-use exchange: valid code -> fresh secret, code invalidated. Null on a bad or
+     *  expired code; false when THIS attempt spent the budget (code deleted — same as expiry). */
     public static function complete_pairing(string $code)
     {
         $pairing = get_option('ferry_pairing');
@@ -43,6 +45,15 @@ final class Auth
             return null;
         }
         if (!hash_equals($pairing['code'], strtoupper(trim($code)))) {
+            $attempts = (int) ($pairing['attempts'] ?? 0) + 1;
+            if ($attempts >= self::MAX_ATTEMPTS) {
+                // Brute-force budget spent: the code dies like an expired one. update_option
+                // is not atomic — a small race around the threshold is acceptable here.
+                delete_option('ferry_pairing');
+                return false;
+            }
+            $pairing['attempts'] = $attempts;
+            update_option('ferry_pairing', $pairing, false);
             return null;
         }
         $secret = bin2hex(random_bytes(32));

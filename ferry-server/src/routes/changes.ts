@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { AppDeps } from '../app.js';
 import type { AgentManager } from '../agent/manager.js';
+import { refuseDuringShutdown } from '../lifecycle.js';
 import type { PushManager, PushWireEvent } from '../push-manager.js';
 import type { Conflict } from '../push/types.js';
 import type { Change, ChangeStatus } from '../store.js';
@@ -37,7 +38,7 @@ export function changesRoutes(
     return reply.send(change);
   });
 
-  app.post('/api/sites/:id/changes/:seq/push', { preHandler: app.requireUser }, async (request, reply) => {
+  app.post('/api/sites/:id/changes/:seq/push', { preHandler: [app.requireUser, refuseDuringShutdown(app.lifecycle)] }, async (request, reply) => {
     const site = deps.store.siteFor(request.user.id, Number((request.params as { id: string }).id));
     if (!site) return reply.code(404).send({ error: 'Site not found.' });
     const seq = Number((request.params as { seq: string }).seq);
@@ -63,12 +64,14 @@ export function changesRoutes(
     return reply.code(202).send({ started: true });
   });
 
-  app.post('/api/sites/:id/changes/:seq/rollback', { preHandler: app.requireUser }, async (request, reply) => {
+  app.post('/api/sites/:id/changes/:seq/rollback', { preHandler: [app.requireUser, refuseDuringShutdown(app.lifecycle)] }, async (request, reply) => {
     const site = deps.store.siteFor(request.user.id, Number((request.params as { id: string }).id));
     if (!site) return reply.code(404).send({ error: 'Site not found.' });
     const seq = Number((request.params as { seq: string }).seq);
     const change = deps.store.changeBySeq(site.id, seq);
     if (!change) return reply.code(404).send({ error: 'Change not found.' });
+    // 6a (#11): a rollback is a write-back call - refuse while a sync is rewriting the clone.
+    if (sync.isRunning(site.id)) return reply.code(409).send({ error: 'A sync is running for this site.' });
     // A rollback is itself a write-back call to the plugin - refuse it while another push (or
     // boot recovery) is already talking to the same site's plugin instance.
     if (push.isPushing(site.id)) return reply.code(409).send({ error: 'A push is already running for this site.' });
@@ -90,7 +93,7 @@ export function changesRoutes(
     return reply.send({ discarded: true });
   });
 
-  app.post('/api/sites/:id/changes/:seq/retry', { preHandler: app.requireUser }, async (request, reply) => {
+  app.post('/api/sites/:id/changes/:seq/retry', { preHandler: [app.requireUser, refuseDuringShutdown(app.lifecycle)] }, async (request, reply) => {
     const site = deps.store.siteFor(request.user.id, Number((request.params as { id: string }).id));
     if (!site) return reply.code(404).send({ error: 'Site not found.' });
     const seq = Number((request.params as { seq: string }).seq);
@@ -157,9 +160,21 @@ export function changesRoutes(
     }
 
     const heartbeat = setInterval(() => reply.raw.write(': ping\n\n'), 15_000);
+    const unregister = app.lifecycle.registerSse(() => {
+      clearInterval(heartbeat);
+      unsubscribe();
+      try {
+        // Named event: browser EventSource onmessage ignores it — no dashboard change.
+        reply.raw.write('event: shutdown\ndata: {}\n\n');
+      } catch {
+        // socket already gone
+      }
+      reply.raw.end();
+    });
     request.raw.on('close', () => {
       clearInterval(heartbeat);
       unsubscribe();
+      unregister();
     });
   });
 }

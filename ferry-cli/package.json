@@ -9,7 +9,8 @@
   "scripts": {
     "ferry": "tsx src/main.ts",
     "test": "vitest run",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "commander": "^12.1.0",

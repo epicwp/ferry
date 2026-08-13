@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FerryClient } from '../src/client.js';
 import { saveProfile } from '../src/profile.js';
-import { defaultBlobFor, invertOp, push, runSmoke } from '../src/push.js';
+import { defaultBlobFor, invertOp, push, rollback, runSmoke } from '../src/push.js';
 import { ROLLBACK_FAILED_PREFIX } from '../src/push-types.js';
 import type { ChangeSpec, DbOp, StepEvent } from '../src/push-types.js';
 
@@ -336,6 +336,17 @@ describe('push', () => {
     if (outcome.status === 'error') {
       expect(outcome.detail).toContain('denied_path');
     }
+  });
+});
+
+describe('rollback', () => {
+  it('rollback() passes the plugin apply_error through', async () => {
+    const { client } = fakeClient({
+      rollback: { rolled_back: false, conflicts: [], apply_error: { key: 'option:x', detail: 'option_set apply failed' } },
+    });
+    const result = await rollback('site', { txid: 'a'.repeat(32), ops: [], client });
+    expect(result.ok).toBe(false);
+    expect(result.applyError).toEqual({ key: 'option:x', detail: 'option_set apply failed' });
   });
 });
 

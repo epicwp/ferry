@@ -84,9 +84,18 @@ export class SyncManager {
       }
       const now = new Date().toISOString();
       this.store.setStatus(site.id, 'ready', { lastError: null, lastSyncAt: now, verifiedAt: now });
+      // Issue #11: run the hook while isRunning() still reads true — its ~50ms git window
+      // must not overlap a turn started the instant the ready emit lands. A hook failure
+      // logs and the sync still lands as ready.
+      if (this.opts.afterReady) {
+        try {
+          await this.opts.afterReady(site);
+        } catch (err) {
+          console.error('afterReady hook failed:', err);
+        }
+      }
       this.active.delete(site.id);
       this.emit(site.id, { status: 'ready', cloneUrl: result.url, verifiedAt: now, error: null });
-      void this.opts.afterReady?.(site)?.catch((err) => console.error('afterReady hook failed:', err));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.store.setStatus(site.id, 'error', { lastError: message });

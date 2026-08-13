@@ -95,6 +95,15 @@ describe('classify', () => {
     }
   });
 
+  it('refuses content tables case-insensitively (wp_USERS, WP_posts)', () => {
+    const ev = {
+      table: 'wp_USERS', kind: 'update' as const, pkCols: ['ID'],
+      before: { ID: '1', user_login: 'a' }, after: { ID: '1', user_login: 'b' },
+    };
+    const result = classify(ev as never, 'wp_');
+    expect(result).toHaveProperty('refused');
+  });
+
   it('classifies a non-noise wp_options update as option_set/low', () => {
     // Same shape as update-option.txt, but a non-ferry-prefixed option name: the fixture's own
     // "ferry_spike_opt" (Task 1's spike-artifact naming, for easy cleanup) collides with the

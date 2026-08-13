@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { AppDeps } from '../app.js';
 import type { AgentManager } from '../agent/manager.js';
 import type { AgentWireEvent } from '../agent/types.js';
+import { refuseDuringShutdown } from '../lifecycle.js';
 import type { PushManager } from '../push-manager.js';
 import type { SyncManager } from '../sync.js';
 import { siteContext } from '../agent/context.js';
@@ -9,7 +10,7 @@ import { siteContext } from '../agent/context.js';
 const MESSAGE_MAX = 4000;
 
 export function agentRoutes(app: FastifyInstance, deps: AppDeps, agents: AgentManager, sync: SyncManager, push?: PushManager): void {
-  app.post('/api/sites/:id/agent/messages', { preHandler: app.requireUser }, async (request, reply) => {
+  app.post('/api/sites/:id/agent/messages', { preHandler: [app.requireUser, refuseDuringShutdown(app.lifecycle)] }, async (request, reply) => {
     const site = deps.store.siteFor(request.user.id, Number((request.params as { id: string }).id));
     if (!site) return reply.code(404).send({ error: 'Site not found.' });
     if (sync.isRunning(site.id)) return reply.code(409).send({ error: 'A sync is running for this site.' });
@@ -23,7 +24,7 @@ export function agentRoutes(app: FastifyInstance, deps: AppDeps, agents: AgentMa
     return reply.code(202).send({ queued: true });
   });
 
-  app.post('/api/sites/:id/agent/sessions', { preHandler: app.requireUser }, async (request, reply) => {
+  app.post('/api/sites/:id/agent/sessions', { preHandler: [app.requireUser, refuseDuringShutdown(app.lifecycle)] }, async (request, reply) => {
     const site = deps.store.siteFor(request.user.id, Number((request.params as { id: string }).id));
     if (!site) return reply.code(404).send({ error: 'Site not found.' });
     await agents.newSession(site);
@@ -77,9 +78,21 @@ export function agentRoutes(app: FastifyInstance, deps: AppDeps, agents: AgentMa
     }
 
     const heartbeat = setInterval(() => reply.raw.write(': ping\n\n'), 15_000);
+    const unregister = app.lifecycle.registerSse(() => {
+      clearInterval(heartbeat);
+      unsubscribe();
+      try {
+        // Named event: browser EventSource onmessage ignores it — no dashboard change.
+        reply.raw.write('event: shutdown\ndata: {}\n\n');
+      } catch {
+        // socket already gone
+      }
+      reply.raw.end();
+    });
     request.raw.on('close', () => {
       clearInterval(heartbeat);
       unsubscribe();
+      unregister();
     });
   });
 

@@ -311,6 +311,17 @@ describe('PushManager', () => {
     expect(store.changeBySeq(site.id, change.seq)!.conflict).toEqual(conflicts);
   });
 
+  it('manual rollback with apply_error produces a descriptive one-row conflict', async () => {
+    const applyError = { key: 'option:x', detail: 'option_set apply failed' };
+    const { store, site, change, manager } = setup(fakeRunner({ rollback: async () => ({ ok: false, applyError }) }));
+    store.setChangeStatus(change.id, 'pushed', { backupTxid: 'txabc', pushedAt: new Date().toISOString() });
+    const pushed = store.changeBySeq(site.id, change.seq)!;
+    await manager.rollback(site, pushed);
+    const stored = store.changeBySeq(site.id, change.seq)!;
+    expect(stored.status).toBe('conflict');
+    expect(stored.conflict).toEqual([{ key: 'option:x', expected: 'rollback applied', found: 'option_set apply failed' }]);
+  });
+
   describe('recover()', () => {
     function interrupted(store: Store, site: Site) {
       const change = store.createChange(site.id, FIELDS);

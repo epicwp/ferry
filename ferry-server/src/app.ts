@@ -5,6 +5,7 @@ import { resetAgentBranchIfIdle } from './agent/branch.js';
 import { AgentManager } from './agent/manager.js';
 import type { AgentRunner } from './agent/types.js';
 import type { Engine } from './engine.js';
+import { Lifecycle } from './lifecycle.js';
 import { PushManager } from './push-manager.js';
 import type { ChangeSpec, PushRunner } from './push/types.js';
 import { agentRoutes } from './routes/agent.js';
@@ -22,6 +23,7 @@ export interface AppDeps {
   engine?: Engine;   // wired in Task 5
   pluginZip?: Buffer; // wired in Task 7
   staticDir?: string; // built dashboard (prod mode); dev uses the Vite proxy instead
+  lifecycle?: Lifecycle;
   agent?: {
     runner: AgentRunner;
     cloneDir: (slug: string) => string;
@@ -39,6 +41,8 @@ export interface AppDeps {
   push?: {
     runner: PushRunner;
   };
+  /** Test seam: e2e runs ~17 signups from one IP against one process; production keeps the default. */
+  authLimits?: { signupMax?: number };
 }
 
 function specFor(change: Change): ChangeSpec {
@@ -53,6 +57,8 @@ declare module 'fastify' {
 
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify();
+  const lifecycle = deps.lifecycle ?? new Lifecycle();
+  app.decorate('lifecycle', lifecycle);
   void app.register(cookie);
 
   // Registered for all application/json requests. Some routes (e.g. POST .../test,
@@ -68,6 +74,17 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       return;
     }
     defaultJsonParser(request, body, done);
+  });
+
+  // Spec 6a §3.1: a 500 must never carry err.message to the client. 4xx (validation,
+  // malformed JSON, deliberate throws) keep their message — those are curated.
+  app.setErrorHandler((err: Error & { statusCode?: number }, request, reply) => {
+    const status = err.statusCode ?? 500;
+    if (status < 500) {
+      return reply.code(status).send({ error: err.message });
+    }
+    console.error(`${request.method} ${request.url} → 500:`, err);
+    return reply.code(500).send({ error: 'Internal server error' });
   });
 
   // Session gate for everything private. Routes opt in via { preHandler: app.requireUser }.
@@ -104,6 +121,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       : undefined;
     if (agents) deps.agent?.onManagerReady?.(agents);
     const push = deps.push ? new PushManager(deps.store, deps.push.runner, { specFor }) : undefined;
+    if (push) lifecycle.pushBusy = () => push.isPushingAny();
     if (push) void push.recover().catch((err) => console.error('push recovery failed:', err));
     syncRoutes(app, deps, sync, agents, push);
     if (agents) agentRoutes(app, deps, agents, sync, push);
@@ -134,5 +152,6 @@ export function buildApp(deps: AppDeps): FastifyInstance {
 declare module 'fastify' {
   interface FastifyInstance {
     requireUser: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    lifecycle: Lifecycle;
   }
 }

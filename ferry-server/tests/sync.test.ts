@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { PullProgress, PullResult } from '../../ferry-cli/src/pull.js';
 import { SyncManager, type SyncState } from '../src/sync.js';
 import { Store, type Site } from '../src/store.js';
@@ -185,6 +185,38 @@ describe('SyncManager afterReady hook', () => {
     sync.start(site);
     await new Promise((r) => setTimeout(r, 20));
     expect(seen.at(-1)!.status).toBe('ready');
+  });
+
+  it('isRunning stays true while the afterReady hook runs; ready emits after it', async () => {
+    let releaseHook!: () => void;
+    const hookGate = new Promise<void>((resolve) => { releaseHook = resolve; });
+    const { store, site, sync } = setup(
+      { pull: async () => RESULT, verifyClone: async () => ({ ok: true }) },
+      { afterReady: () => hookGate },
+    );
+    const states: string[] = [];
+    sync.subscribe(site, (s) => states.push(s.status));
+    sync.start(site);
+    await vi.waitFor(() => expect(store.siteById(site.id)!.status).toBe('ready'));
+    expect(sync.isRunning(site.id)).toBe(true); // hook still pending — turn starts stay blocked
+    expect(states).not.toContain('ready'); // ready not emitted yet
+    releaseHook();
+    await vi.waitFor(() => expect(states).toContain('ready'));
+    expect(sync.isRunning(site.id)).toBe(false);
+  });
+
+  it('a throwing afterReady hook still lands the sync as ready', async () => {
+    const { site, sync } = setup(
+      { pull: async () => RESULT, verifyClone: async () => ({ ok: true }) },
+      { afterReady: async () => { throw new Error('hook boom'); } },
+    );
+    const states: string[] = [];
+    sync.subscribe(site, (s) => states.push(s.status));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    sync.start(site);
+    await vi.waitFor(() => expect(states).toContain('ready'));
+    expect(sync.isRunning(site.id)).toBe(false);
+    spy.mockRestore();
   });
 });
 

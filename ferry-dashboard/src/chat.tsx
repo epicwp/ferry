@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { agentHistory, agentNewSession, agentSend, ApiError, type AgentWireEvent } from './api';
 import { InlineChangeCard } from './change-parts';
 
@@ -101,6 +101,14 @@ export function AgentChat({ siteId }: { siteId: number }) {
   const [streamText, setStreamText] = useState('');
   const [conn, setConn] = useState<ConnState>('connecting');
   const [draft, setDraft] = useState(() => (location.state as { prefill?: string } | null)?.prefill ?? '');
+  const navigate = useNavigate();
+  // Issue #11: consume-and-clear — the prefill must not survive in history state,
+  // or a reload re-seeds the composer with the stale message.
+  useEffect(() => {
+    if ((location.state as { prefill?: string } | null)?.prefill) {
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.pathname, location.state, navigate]);
   const [sendError, setSendError] = useState('');
   const esRef = useRef<EventSource | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);

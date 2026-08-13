@@ -74,4 +74,10 @@ final class ExcludesTest extends TestCase
         $this->assertFalse(Excludes::allowed_upload('wp-content/cache/x.jpg'));
         $this->assertFalse(Excludes::allowed_upload('wp-config.php'));
     }
+
+    public function test_prefix_exclusions_are_case_insensitive(): void
+    {
+        $this->assertTrue(Excludes::excluded('WP-CONTENT/UPLOADS/photo.jpg'));
+        $this->assertTrue(Excludes::excluded('Wp-Content/Cache/page.html'));
+    }
 }

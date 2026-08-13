@@ -177,7 +177,7 @@ function emitCommitStep(onStep: (e: StepEvent) => void, step: PushStep, ok: bool
 export async function rollback(
   slug: string,
   opts: { txid: string; ops: DbOp[]; client?: FerryClient },
-): Promise<{ ok: boolean; conflicts?: Conflict[] }> {
+): Promise<{ ok: boolean; conflicts?: Conflict[]; applyError?: { key: string; detail: string } }> {
   let client = opts.client;
   if (!client) {
     const profile = loadProfile(slug);
@@ -185,7 +185,7 @@ export async function rollback(
     await client.syncClock();
   }
   const res = await client.postJson('/ferry/v1/rollback', { txid: opts.txid, ops: opts.ops.map(invertOp) });
-  return { ok: res.data.rolled_back, conflicts: res.data.conflicts };
+  return { ok: res.data.rolled_back, conflicts: res.data.conflicts, applyError: res.data.apply_error };
 }
 
 /** set↔set with old/new swapped (absent-marker aware); insert↔delete. */

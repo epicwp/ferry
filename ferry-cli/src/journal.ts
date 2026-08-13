@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import type { CloneEnv } from './env/ddev.js';
 import { loadProfile } from './profile.js';
 import type { DbOp, RiskClass } from './push-types.js';
+import { isRefusedBareTable, stripTablePrefix } from './refusals.js';
 
 const run = promisify(execFile);
 
@@ -100,17 +101,6 @@ function isNoiseOption(name: string): boolean {
   return name === 'cron' || NOISE_OPTION_RE.test(name);
 }
 
-const REFUSED_TABLES = new Set(['posts', 'comments', 'commentmeta', 'users', 'usermeta']);
-const REFUSED_PREFIXES = ['woocommerce_', 'wc_', 'actionscheduler_'];
-
-function isRefusedTable(stripped: string): boolean {
-  return REFUSED_TABLES.has(stripped) || REFUSED_PREFIXES.some((p) => stripped.startsWith(p));
-}
-
-function stripPrefix(table: string, prefix: string): string {
-  return table.startsWith(prefix) ? table.slice(prefix.length) : table;
-}
-
 /**
  * `DbOp.pk` is a single `number` - it cannot represent a composite key (e.g.
  * wp_term_relationships' (object_id, term_taxonomy_id)) or a non-numeric key (varchar/UUID).
@@ -122,6 +112,7 @@ function buildRowOp(ev: RawRowEvent): DbOp | { unsupportedPk: true } {
   if (ev.pkCols.length !== 1) return { unsupportedPk: true }; // composite key or no PK found
   const pkCol = ev.pkCols[0];
   const row = ev.after ?? ev.before!;
+  // pk is read from row[pkCol] itself — op.pk and new/old[pkCol] agree by construction.
   const pk = Number(row[pkCol]);
   if (!Number.isFinite(pk)) return { unsupportedPk: true }; // varchar/UUID/null key
   if (ev.kind === 'insert') {
@@ -167,14 +158,14 @@ export function classify(
 ): { op: DbOp; risk: RiskClass } | { noise: true } | { refused: string } {
   if (hasBinaryValue(ev)) return { refused: `binary_value_unsupported: ${ev.table}` };
 
-  const stripped = stripPrefix(ev.table, prefix);
+  const stripped = stripTablePrefix(ev.table, prefix);
 
   if (stripped === 'options') {
     const name = (ev.after ?? ev.before)?.option_name ?? '';
     if (isNoiseOption(name)) return { noise: true };
     return { op: buildOptionOp(ev, name), risk: 'low' };
   }
-  if (isRefusedTable(stripped)) return { refused: `content table: ${ev.table}` };
+  if (isRefusedBareTable(stripped)) return { refused: `content table: ${ev.table}` };
   if (stripped === 'postmeta') return { op: buildPostmetaOp(ev), risk: 'low' };
 
   const rowOp = buildRowOp(ev);

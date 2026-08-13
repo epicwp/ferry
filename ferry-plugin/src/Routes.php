@@ -66,6 +66,9 @@ final class Routes
             return new \WP_Error('ferry_multisite', 'Multisite is not supported. Ferry refuses multisite installs by design.', ['status' => 409]);
         }
         $secret = Auth::complete_pairing((string) $request->get_param('code'));
+        if ($secret === false) {
+            return new \WP_Error('ferry_pairing_locked', 'Too many attempts — issue a new pairing code on the site (re-activate the plugin or run `wp ferry pair`).', ['status' => 403]);
+        }
         if ($secret === null) {
             return new \WP_Error('ferry_bad_code', 'Invalid or expired pairing code.', ['status' => 403]);
         }

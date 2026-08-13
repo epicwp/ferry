@@ -53,6 +53,10 @@ final class DbOps
                     $refused[] = ['index' => $index, 'reason' => 'refused_table'];
                     continue;
                 }
+                if (!self::pk_consistent($op)) {
+                    $refused[] = ['index' => $index, 'reason' => 'pk_mismatch'];
+                    continue;
+                }
             }
             $ok[] = $op;
         }
@@ -101,6 +105,23 @@ final class DbOps
             }
         }
         return false;
+    }
+
+    /** Row ops: when new/old carries the pk column, its value must agree with `pk` —
+     *  otherwise the read-set CAS checks one row while apply() writes another
+     *  (row_insert), or an update silently reassigns the primary key (row_update). */
+    private static function pk_consistent(array $op): bool
+    {
+        $pkCol = (string) $op['pkCol'];
+        foreach (['new', 'old'] as $side) {
+            if (isset($op[$side]) && is_array($op[$side]) && array_key_exists($pkCol, $op[$side])) {
+                $value = $op[$side][$pkCol];
+                if (!is_numeric($value) || (float) $value !== (float) $op['pk']) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private static function shape_ok(string $kind, array $op): bool
