@@ -5,6 +5,7 @@ import { resetAgentBranchIfIdle } from './agent/branch.js';
 import { AgentManager } from './agent/manager.js';
 import type { AgentRunner } from './agent/types.js';
 import type { Engine } from './engine.js';
+import { Lifecycle } from './lifecycle.js';
 import { PushManager } from './push-manager.js';
 import type { ChangeSpec, PushRunner } from './push/types.js';
 import { agentRoutes } from './routes/agent.js';
@@ -22,6 +23,7 @@ export interface AppDeps {
   engine?: Engine;   // wired in Task 5
   pluginZip?: Buffer; // wired in Task 7
   staticDir?: string; // built dashboard (prod mode); dev uses the Vite proxy instead
+  lifecycle?: Lifecycle;
   agent?: {
     runner: AgentRunner;
     cloneDir: (slug: string) => string;
@@ -53,6 +55,8 @@ declare module 'fastify' {
 
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify();
+  const lifecycle = deps.lifecycle ?? new Lifecycle();
+  app.decorate('lifecycle', lifecycle);
   void app.register(cookie);
 
   // Registered for all application/json requests. Some routes (e.g. POST .../test,
@@ -145,5 +149,6 @@ export function buildApp(deps: AppDeps): FastifyInstance {
 declare module 'fastify' {
   interface FastifyInstance {
     requireUser: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    lifecycle: Lifecycle;
   }
 }

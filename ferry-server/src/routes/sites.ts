@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { MultisiteError } from '../../../ferry-cli/src/link.js';
 import { slugFromUrl } from '../../../ferry-cli/src/profile.js';
+import { refuseDuringShutdown } from '../lifecycle.js';
 import { RateLimiter } from '../rate-limit.js';
 import type { AppDeps } from '../app.js';
 import type { Site } from '../store.js';
@@ -55,7 +56,7 @@ export function siteRoutes(app: FastifyInstance, deps: AppDeps): void {
   // operator-supplied site.url — cap the pump per site.
   const pairLimiter = new RateLimiter(5, 10 * 60_000);
 
-  app.post('/api/sites/:id/pair', { preHandler: app.requireUser }, async (request, reply) => {
+  app.post('/api/sites/:id/pair', { preHandler: [app.requireUser, refuseDuringShutdown(app.lifecycle)] }, async (request, reply) => {
     const site = deps.store.siteFor(request.user.id, Number((request.params as { id: string }).id));
     if (!site) return reply.code(404).send({ error: 'Site not found.' });
     if (site.status !== 'new' && site.status !== 'refused_multisite') {
