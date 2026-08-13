@@ -219,6 +219,20 @@ describe('changes routes', () => {
     expect(second.statusCode).toBe(409);
   });
 
+  it('refuses to roll back while a sync is running (409)', async () => {
+    const engine = stubEngine({ pull: () => new Promise(() => {}), verifyClone: async () => ({ ok: true }) });
+    const { app, store } = makeApp({ engine, push: { runner: scriptedPushRunner() } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const pushed = draftChange(store, site.id);
+    store.setChangeStatus(pushed.id, 'pushed', { backupTxid: 'txabc', pushedAt: new Date().toISOString() });
+
+    await app.inject({ method: 'POST', url: `/api/sites/${site.id}/sync`, headers: { cookie } });
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${pushed.seq}/rollback`, headers: { cookie } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'A sync is running for this site.' });
+  });
+
   it('refuses to roll back while a (different) push is in progress for the site (409)', async () => {
     const { app, store } = makeApp({ engine: stubEngine(), push: { runner: scriptedPushRunner() } });
     const cookie = await signup(app);
@@ -284,6 +298,70 @@ describe('changes routes', () => {
     await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${pushing.seq}/push`, headers: { cookie } });
     const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${conflicted.seq}/retry`, headers: { cookie } });
     expect(res.statusCode).toBe(409);
+  });
+
+  it('refuses retry while a sync is running, with the exact guard message (409)', async () => {
+    const engine = stubEngine({ pull: () => new Promise(() => {}), verifyClone: async () => ({ ok: true }) });
+    const { app, store } = makeApp({ engine, agent: agentDeps(scriptedRunner()), push: { runner: scriptedPushRunner() } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const change = draftChange(store, site.id);
+    store.setChangeStatus(change.id, 'conflict', { conflict: [{ key: 'wp_options.blogname', expected: 'A', found: 'C' }] });
+
+    await app.inject({ method: 'POST', url: `/api/sites/${site.id}/sync`, headers: { cookie } });
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${change.seq}/retry`, headers: { cookie } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'A sync is running for this site.' });
+  });
+
+  it('refuses retry while a push is in progress, with the exact guard message (409)', async () => {
+    const { app, store } = makeApp({ engine: stubEngine(), agent: agentDeps(scriptedRunner()), push: { runner: scriptedPushRunner() } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const conflicted = draftChange(store, site.id);
+    store.setChangeStatus(conflicted.id, 'conflict', { conflict: [{ key: 'wp_options.blogname', expected: 'A', found: 'C' }] });
+    const pushing = draftChange(store, site.id);
+
+    await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${pushing.seq}/push`, headers: { cookie } });
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${conflicted.seq}/retry`, headers: { cookie } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'A push is in progress for this site.' });
+  });
+
+  it('refuses retry when the site is not ready, with the exact guard message (409)', async () => {
+    const { app, store } = makeApp({ engine: stubEngine(), agent: agentDeps(scriptedRunner()), push: { runner: scriptedPushRunner() } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const change = draftChange(store, site.id);
+    store.setChangeStatus(change.id, 'conflict', { conflict: [{ key: 'wp_options.blogname', expected: 'A', found: 'C' }] });
+    store.setStatus(site.id, 'error', { lastError: 'boom' });
+
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${change.seq}/retry`, headers: { cookie } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'Sync the site first.' });
+  });
+
+  it('refuses retry on a draft change, with the exact guard message (409)', async () => {
+    const { app, store } = makeApp({ engine: stubEngine(), agent: agentDeps(scriptedRunner()), push: { runner: scriptedPushRunner() } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const change = draftChange(store, site.id);
+
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${change.seq}/retry`, headers: { cookie } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'Only a conflicted change can be retried.' });
+  });
+
+  it('refuses retry when the app has no agents wired, with the exact guard message (409)', async () => {
+    const { app, store } = makeApp({ engine: stubEngine(), push: { runner: scriptedPushRunner() } });
+    const cookie = await signup(app);
+    const site = await readySite(app, cookie, store);
+    const change = draftChange(store, site.id);
+    store.setChangeStatus(change.id, 'conflict', { conflict: [{ key: 'wp_options.blogname', expected: 'A', found: 'C' }] });
+
+    const res = await app.inject({ method: 'POST', url: `/api/sites/${site.id}/changes/${change.seq}/retry`, headers: { cookie } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'Agent chat is not available.' });
   });
 
   it('replays push events over SSE with ?after and no duplicates', async () => {

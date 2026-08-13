@@ -70,6 +70,8 @@ export function changesRoutes(
     const seq = Number((request.params as { seq: string }).seq);
     const change = deps.store.changeBySeq(site.id, seq);
     if (!change) return reply.code(404).send({ error: 'Change not found.' });
+    // 6a (#11): a rollback is a write-back call - refuse while a sync is rewriting the clone.
+    if (sync.isRunning(site.id)) return reply.code(409).send({ error: 'A sync is running for this site.' });
     // A rollback is itself a write-back call to the plugin - refuse it while another push (or
     // boot recovery) is already talking to the same site's plugin instance.
     if (push.isPushing(site.id)) return reply.code(409).send({ error: 'A push is already running for this site.' });
