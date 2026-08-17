@@ -28,12 +28,17 @@ both at design level; M2a gets the first implementation plan.
 | Transport CP ↔ site machine | A small HMAC-authenticated HTTP daemon ("sited") inside the site machine, over Fly private networking (6PN). Chosen over Machines-API exec (hard 60s cap, buffered output — unusable for imports) and over hallpass SSH/SFTP (certs expire ≤72h with no documented API to re-mint without flyctl). |
 | Site machine shape | ONE container image (Apache+PHP WordPress base + MariaDB + wp-cli + mysqlbinlog + sited under supervisord). Multi-container Machines are org-allowlist-gated and per-container volume mounts are unsupported — avoided. |
 | Local dev parity | DDEV stays the default env; `FERRY_CLONE_ENV=ddev|fly` selects the implementation (default `ddev`). The DDEV e2e suites remain the merge gate. |
+| Production parity on Fly (Robbert, spec review 2026-08-17) | PHP-version parity via an image tag matrix: CI builds `ferry-site-runtime:php<minor>` per supported PHP minor; `provision()` picks the tag from `info.php_version` — same source DDEV uses (`ddevConfig`, `ferry-cli/src/env/ddev.ts:16-29`). Webserver is Apache-only in M2a (the `.htaccess` path); MariaDB version fixed. Any parity mismatch (unsupported PHP minor → nearest tag, non-Apache production webserver, db version) is surfaced explicitly in the sync result, never silent. Nginx variant + db-version parity follow when a real site needs them. |
 
 ## 3. Site-runtime image + provisioning
 
 **Image `ferry-site-runtime`** (new `docker/site-runtime/Dockerfile`):
 WordPress Apache+PHP base, MariaDB server, wp-cli, `mysqlbinlog`, Node (for
-sited), supervisord as PID 1. Docroot `/data/www`, MySQL datadir
+sited), supervisord as PID 1. **Built as a tag matrix per PHP minor**
+(`:php8.1` … `:php8.4`, one Dockerfile with a PHP-version build arg);
+`provision()` selects the tag from `info.php_version` so the clone runs the
+production PHP version, mirroring DDEV's behavior. An unsupported minor maps
+to the nearest tag and is reported in the sync result. Docroot `/data/www`, MySQL datadir
 `/data/mysql`, binlog on with the same settings as DDEV's `ferry-binlog.cnf`
 (`log-bin`, ROW format, FULL row image, `ferry-cli/src/env/ddev.ts:32-40`).
 MariaDB binds loopback only — nothing exposes 3306 on the private
@@ -186,7 +191,8 @@ to the fly.dev clone URL.
 1. Robbert pairs the demo site from the live dashboard (plugin zip →
    pairing code) and a sync completes on Fly: status `ready`, clone URL
    `https://ferry-s-….fly.dev` verified and browsable, showing the demo
-   site at production parity.
+   site at production parity — including the production PHP minor
+   (verifiable via `wp` through sited or a phpinfo check).
 2. Agent chat on the live dashboard edits the clone; the edit is visible on
    the clone URL after the turn.
 3. A DB change on the demo production site appears via the journal path
@@ -208,6 +214,8 @@ to the fly.dev clone URL.
   verify).
 - First-boot 6PN reachability timing (retry loop around sited health).
 - MariaDB memory fit in 1 GB alongside PHP (or bump to 2 GB).
+- Which PHP minors to prebuild (check what the demo site + WP core support
+  today; likely 8.1–8.4) and the CI cost of the matrix build.
 
 ## 13. Out of scope
 
