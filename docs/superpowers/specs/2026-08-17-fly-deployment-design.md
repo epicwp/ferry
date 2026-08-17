@@ -1,7 +1,7 @@
 # Ferry on Fly.io — deployment design (M1 + M2 direction)
 
 **Date:** 2026-08-17
-**Status:** Approved by Robbert (brainstorm 2026-08-17); M1 ready for writing-plans
+**Status:** M1 DEPLOYED 2026-08-17 — live at https://ferry-cp.fly.dev (app `ferry-cp`, ams, release v3 via the push-to-main pipeline); all §9 criteria proven. M2 (clone substrate on Fly) is the next brainstorm.
 **Kickoff:** `2026-08-17-fly-deploy-kickoff.md` (verbatim prompt with the framing decisions)
 
 ## 1. Context and goal
