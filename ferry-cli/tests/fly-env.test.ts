@@ -5,10 +5,58 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildSited, type SitedDeps } from '../../ferry-sited/src/app.js';
 import { FlyEnv, flyConfigFromEnv, type FlyEnvConfig } from '../src/env/fly.js';
-import { saveProfile } from '../src/profile.js';
+import { loadProfile, saveProfile, type SiteInfo } from '../src/profile.js';
 
 const SECRET = 'fly-test-secret';
 const SLUG = 'my-site';
+
+interface FakeApiCall { method: string; args: unknown[] }
+
+/** Records every FlyApi call in order; return values are fixed test doubles
+ *  (vol_fake / m_fake) so assertions on the machine config and saved profile stay simple. */
+function fakeFlyApi(opts: { destroyError?: Error } = {}): { api: NonNullable<FlyEnvConfig['api']>; calls: FakeApiCall[] } {
+  const calls: FakeApiCall[] = [];
+  return {
+    calls,
+    api: {
+      async createApp(name: string, org: string): Promise<void> {
+        calls.push({ method: 'createApp', args: [name, org] });
+      },
+      async allocateIps(app: string): Promise<void> {
+        calls.push({ method: 'allocateIps', args: [app] });
+      },
+      async createVolume(app: string, name: string, region: string, sizeGb: number): Promise<{ id: string }> {
+        calls.push({ method: 'createVolume', args: [app, name, region, sizeGb] });
+        return { id: 'vol_fake' };
+      },
+      async createMachine(app: string, region: string, config: Record<string, unknown>): Promise<{ id: string }> {
+        calls.push({ method: 'createMachine', args: [app, region, config] });
+        return { id: 'm_fake' };
+      },
+      async waitStarted(app: string, machineId: string): Promise<void> {
+        calls.push({ method: 'waitStarted', args: [app, machineId] });
+      },
+      async destroyApp(app: string): Promise<void> {
+        calls.push({ method: 'destroyApp', args: [app] });
+        if (opts.destroyError) throw opts.destroyError;
+      },
+    },
+  };
+}
+
+function fakeInfo(phpVersion: string): SiteInfo {
+  return {
+    wp: '6.4',
+    php: { version: phpVersion, extensions: [], ini: {} },
+    db: { server: 'mysql', version: '8.0', charset: 'utf8mb4', collation: 'utf8mb4_unicode_ci', bytes: 0 },
+    server: 'apache',
+    constants: {},
+    multisite: false,
+    prefix: 'wp_',
+    abspath: '/var/www/html/',
+    siteurl: 'https://example.test',
+  };
+}
 
 describe('FlyEnv', () => {
   let home: string;
@@ -181,6 +229,105 @@ describe('FlyEnv', () => {
     mkdirSync(otherClone, { recursive: true });
     saveProfile({ url: 'https://x.test', secret: 's', slug: otherSlug, clonePath: otherClone });
     await expect(env().binlogPosition(otherClone)).rejects.toThrow(/no-fly-site/);
+  });
+
+  describe('provision', () => {
+    beforeEach(() => {
+      // Each provision test starts from a profile with no flySited state, so the
+      // idempotent short-circuit doesn't fire (the outer beforeEach's default profile has one).
+      saveProfile({ url: 'https://example.test', secret: 's', slug: SLUG, clonePath });
+    });
+
+    it('creates app → ips → volume → machine → waits → polls sited health → saves flySited to the profile', async () => {
+      const { api, calls } = fakeFlyApi();
+      await env({ api }).provision(clonePath, fakeInfo('8.2.15'), SLUG);
+
+      expect(calls.map((c) => c.method)).toEqual(['createApp', 'allocateIps', 'createVolume', 'createMachine', 'waitStarted']);
+      const appName = FlyEnv.appName(SLUG);
+      expect(calls[0].args).toEqual([appName, 'personal']);
+      expect(calls[1].args).toEqual([appName]);
+      expect(calls[2].args).toEqual([appName, 'data', 'ams', 3]);
+      expect(calls[4].args).toEqual([appName, 'm_fake']);
+
+      const saved = loadProfile(SLUG);
+      expect(saved.flySited).toMatchObject({ app: appName, machineId: 'm_fake', volumeId: 'vol_fake' });
+      expect(saved.flySited?.secret).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    it('picks the image tag from info.php.version (8.2.15 → :php8.2)', async () => {
+      const { api, calls } = fakeFlyApi();
+      await env({ api }).provision(clonePath, fakeInfo('8.2.15'), SLUG);
+
+      const config = calls.find((c) => c.method === 'createMachine')!.args[2] as { image: string };
+      expect(config.image).toBe('ghcr.io/epicwp/ferry-site-runtime:php8.2');
+      expect(loadProfile(SLUG).flySited?.parityNote).toBeUndefined();
+    });
+
+    it('maps an unsupported PHP minor to the nearest tag and records a parityNote', async () => {
+      const { api, calls } = fakeFlyApi();
+      await env({ api }).provision(clonePath, fakeInfo('7.4.33'), SLUG);
+
+      const config = calls.find((c) => c.method === 'createMachine')!.args[2] as { image: string };
+      expect(config.image).toBe('ghcr.io/epicwp/ferry-site-runtime:php8.1');
+      const note = loadProfile(SLUG).flySited?.parityNote;
+      expect(note).toContain('7.4.33');
+      expect(note).toContain('8.1');
+    });
+
+    it('is idempotent when flySited already exists and the machine responds (no duplicate create calls)', async () => {
+      saveProfile({
+        url: 'https://example.test', secret: 's', slug: SLUG, clonePath,
+        flySited: { app: 'a', machineId: 'm', volumeId: 'v', secret: SECRET },
+      });
+      const { api, calls } = fakeFlyApi();
+      await env({ api }).provision(clonePath, fakeInfo('8.2.15'), SLUG);
+      expect(calls).toHaveLength(0);
+    });
+
+    it('carries the sited secret as a files entry, the volume mount at /data, services 80/443, guest 1024MB shared-1x', async () => {
+      const { api, calls } = fakeFlyApi();
+      await env({ api }).provision(clonePath, fakeInfo('8.2.15'), SLUG);
+
+      const config = calls.find((c) => c.method === 'createMachine')!.args[2] as Record<string, unknown>;
+      expect(config.guest).toEqual({ cpu_kind: 'shared', cpus: 1, memory_mb: 1024 });
+      expect(config.mounts).toEqual([{ volume: 'vol_fake', path: '/data' }]);
+      expect(config.services).toEqual([{
+        protocol: 'tcp',
+        internal_port: 80,
+        ports: [
+          { port: 80, handlers: ['http'] },
+          { port: 443, handlers: ['tls', 'http'] },
+        ],
+      }]);
+      expect(config.restart).toEqual({ policy: 'always' });
+
+      const files = config.files as { guest_path: string; raw_value: string }[];
+      expect(files).toHaveLength(1);
+      expect(files[0].guest_path).toBe('/etc/ferry/sited-secret');
+      const savedSecret = loadProfile(SLUG).flySited?.secret;
+      expect(Buffer.from(files[0].raw_value, 'base64').toString('utf8')).toBe(savedSecret);
+    });
+  });
+
+  describe('destroy', () => {
+    it('calls FlyApi.destroyApp with the derived app name and clears flySited', async () => {
+      const { api, calls } = fakeFlyApi();
+      await env({ api }).destroy(SLUG);
+      expect(calls).toEqual([{ method: 'destroyApp', args: [FlyEnv.appName(SLUG)] }]);
+      expect(loadProfile(SLUG).flySited).toBeUndefined();
+    });
+
+    it('tolerates an already-absent app (404) and still clears flySited', async () => {
+      const { api } = fakeFlyApi({ destroyError: new Error(`fly api DELETE .../apps/${FlyEnv.appName(SLUG)}?force=true → 404`) });
+      await expect(env({ api }).destroy(SLUG)).resolves.toBeUndefined();
+      expect(loadProfile(SLUG).flySited).toBeUndefined();
+    });
+
+    it('propagates non-404 errors from destroyApp and leaves flySited untouched', async () => {
+      const { api } = fakeFlyApi({ destroyError: new Error(`fly api DELETE .../apps/${FlyEnv.appName(SLUG)}?force=true → 500`) });
+      await expect(env({ api }).destroy(SLUG)).rejects.toThrow(/500/);
+      expect(loadProfile(SLUG).flySited).toBeDefined();
+    });
   });
 });
 

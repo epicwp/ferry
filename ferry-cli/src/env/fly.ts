@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { basename } from 'node:path';
 import { request } from 'undici';
 import * as tar from 'tar';
-import { loadProfile, type SiteInfo } from '../profile.js';
+import { loadProfile, saveProfile, type SiteInfo } from '../profile.js';
 import type { CloneEnv, TableColumns } from './ddev.js';
 import { FlyApi } from './fly-api.js';
 
@@ -75,6 +75,10 @@ async function readJson(res: HttpResponse, method: string, path: string): Promis
   return text ? JSON.parse(text) : undefined;
 }
 
+// Public method surface of FlyApi, extracted via Pick so a plain fake object (no private
+// fields) can satisfy the type in tests without importing/duplicating FlyApi's signatures.
+type FlyApiClient = Pick<FlyApi, 'createApp' | 'allocateIps' | 'createVolume' | 'createMachine' | 'waitStarted' | 'destroyApp'>;
+
 export interface FlyEnvConfig {
   token: string;
   org: string;
@@ -82,7 +86,20 @@ export interface FlyEnvConfig {
   imageRepo: string;
   sitedPort?: number; // default 2323
   sitedBaseFor?: (app: string, machineId: string) => string; // test seam
-  api?: FlyApi; // test seam (Task 8)
+  api?: FlyApiClient; // test seam (Task 8)
+}
+
+const PHP_TAGS = ['8.1', '8.2', '8.3', '8.4'];
+
+/** Maps a production PHP version to a supported clone image tag. Unsupported minors
+ *  (e.g. EOL 7.4) fall back to the nearest supported tag and carry a parity note for
+ *  the pull progress stream (§2.5: parity is core, but the clone still has to boot). */
+function phpTag(version: string): { tag: string; note?: string } {
+  const minor = version.split('.').slice(0, 2).join('.');
+  if (PHP_TAGS.includes(minor)) return { tag: `php${minor}` };
+  const nearest = PHP_TAGS.reduce((a, b) =>
+    Math.abs(Number(b) - Number(minor)) < Math.abs(Number(a) - Number(minor)) ? b : a);
+  return { tag: `php${nearest}`, note: `PHP parity gap: production runs ${version}, clone runs ${nearest} (nearest supported).` };
 }
 
 export function flyConfigFromEnv(env: NodeJS.ProcessEnv): FlyEnvConfig {
@@ -99,7 +116,11 @@ export function flyConfigFromEnv(env: NodeJS.ProcessEnv): FlyEnvConfig {
 }
 
 export class FlyEnv implements CloneEnv {
-  constructor(private readonly cfg: FlyEnvConfig) {}
+  private readonly flyApi: FlyApiClient;
+
+  constructor(private readonly cfg: FlyEnvConfig) {
+    this.flyApi = cfg.api ?? new FlyApi({ token: cfg.token });
+  }
 
   static appName(slug: string): string {
     const hash6 = createHash('sha256').update(`ferry-site:${slug}`).digest('hex').slice(0, 6);
@@ -110,12 +131,74 @@ export class FlyEnv implements CloneEnv {
     return `https://${FlyEnv.appName(name)}.fly.dev`;
   }
 
-  async provision(): Promise<void> {
-    throw new Error('provision arrives in Task 8');
+  /** App-per-site on Fly Machines API (spike findings doc §1-3): create app → allocate
+   *  IPs → 3GB data volume → machine (sited secret shipped as a boot-time file) → wait
+   *  started → poll sited /health until it answers. Idempotent: a profile that already
+   *  points at a live, healthy machine short-circuits (re-pull after a prior provision). */
+  async provision(clonePath: string, info: SiteInfo, name: string): Promise<void> {
+    const slug = name;
+    const app = FlyEnv.appName(slug);
+    const profile = loadProfile(slug);
+
+    if (profile.flySited && (await healthOk(this.sitedBaseUrl(profile.flySited.app, profile.flySited.machineId)))) {
+      return;
+    }
+
+    await this.flyApi.createApp(app, this.cfg.org);
+    await this.flyApi.allocateIps(app);
+    const volume = await this.flyApi.createVolume(app, 'data', this.cfg.region, 3);
+    const secret = randomBytes(32).toString('hex');
+    const { tag, note } = phpTag(info.php.version);
+
+    const machine = await this.flyApi.createMachine(app, this.cfg.region, {
+      image: `${this.cfg.imageRepo}:${tag}`,
+      guest: { cpu_kind: 'shared', cpus: 1, memory_mb: 1024 },
+      mounts: [{ volume: volume.id, path: '/data' }],
+      files: [{ guest_path: '/etc/ferry/sited-secret', raw_value: Buffer.from(secret).toString('base64') }],
+      services: [
+        {
+          protocol: 'tcp',
+          internal_port: 80,
+          ports: [
+            { port: 80, handlers: ['http'] },
+            { port: 443, handlers: ['tls', 'http'] },
+          ],
+        },
+      ],
+      restart: { policy: 'always' },
+    });
+    await this.flyApi.waitStarted(app, machine.id);
+
+    const baseUrl = this.sitedBaseUrl(app, machine.id);
+    if (!(await waitForHealth(baseUrl, 2000, 120_000))) {
+      throw new Error(`fly machine ${machine.id} for app ${app} never answered /health within 120s`);
+    }
+
+    profile.flySited = { app, machineId: machine.id, volumeId: volume.id, secret, ...(note ? { parityNote: note } : {}) };
+    saveProfile(profile);
   }
 
-  async destroy(): Promise<void> {
-    throw new Error('destroy arrives in Task 8');
+  /** Volumes die with the app (spike-confirmed: `DELETE ?force=true` removes machines
+   *  + volumes together), so this is just app teardown + clearing the saved Fly state.
+   *  An already-absent app (404) is tolerated so destroy is safe to retry. */
+  async destroy(name: string): Promise<void> {
+    const app = FlyEnv.appName(name);
+    try {
+      await this.flyApi.destroyApp(app);
+    } catch (err) {
+      if (!isNotFoundError(err)) throw err;
+    }
+    const profile = loadProfile(name);
+    if (profile.flySited) {
+      delete profile.flySited;
+      saveProfile(profile);
+    }
+  }
+
+  private sitedBaseUrl(app: string, machineId: string): string {
+    return this.cfg.sitedBaseFor
+      ? this.cfg.sitedBaseFor(app, machineId)
+      : `http://${machineId}.vm.${app}.internal:${this.cfg.sitedPort ?? 2323}`;
   }
 
   async showColumns(clonePath: string, table: string): Promise<TableColumns> {
@@ -179,11 +262,36 @@ export class FlyEnv implements CloneEnv {
       throw new Error(`site "${slug}" has no Fly machine — pull/provision first`);
     }
     const { app, machineId, secret } = profile.flySited;
-    const baseUrl = this.cfg.sitedBaseFor
-      ? this.cfg.sitedBaseFor(app, machineId)
-      : `http://${machineId}.vm.${app}.internal:${this.cfg.sitedPort ?? 2323}`;
-    return { baseUrl, secret };
+    return { baseUrl: this.sitedBaseUrl(app, machineId), secret };
   }
+}
+
+/** Unauthenticated single-shot check — sited's `/health` route needs no signature. */
+async function healthOk(baseUrl: string): Promise<boolean> {
+  try {
+    const res = await request(`${baseUrl}/health`, { method: 'GET' });
+    if (res.statusCode !== 200) return false;
+    const text = await res.body.text();
+    const data = text ? (JSON.parse(text) as { ok?: boolean }) : {};
+    return data.ok === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Spike finding §3: first 6PN request lands in ~2s, so checking before ever sleeping
+ *  keeps an already-healthy machine (or a fast-booting one) from waiting needlessly. */
+async function waitForHealth(baseUrl: string, intervalMs: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await healthOk(baseUrl)) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
+function isNotFoundError(err: unknown): boolean {
+  return err instanceof Error && /\b404\b/.test(err.message);
 }
 
 async function postJson(baseUrl: string, secret: string, path: string, payload: unknown): Promise<unknown> {
