@@ -79,6 +79,7 @@ describe('FlyApi.createVolume', () => {
     const result = await api.createVolume('ferry-s-x', 'data', 'ams', 3);
     expect(calls[0].url).toBe('https://api.machines.dev/v1/apps/ferry-s-x/volumes');
     expect(calls[0].method).toBe('POST');
+    expect(calls[0].headers.authorization).toBe(`Bearer ${TOKEN}`);
     expect(JSON.parse(calls[0].body!)).toEqual({ name: 'data', size_gb: 3, region: 'ams' });
     expect(result).toEqual({ id: 'vol_abc123' });
   });
@@ -95,6 +96,7 @@ describe('FlyApi.createMachine', () => {
     const result = await api.createMachine('ferry-s-x', 'ams', config);
     expect(calls[0].url).toBe('https://api.machines.dev/v1/apps/ferry-s-x/machines');
     expect(calls[0].method).toBe('POST');
+    expect(calls[0].headers.authorization).toBe(`Bearer ${TOKEN}`);
     expect(JSON.parse(calls[0].body!)).toEqual({ region: 'ams', config });
     expect(result).toEqual({ id: 'm_123' });
   });
@@ -107,6 +109,7 @@ describe('FlyApi.waitStarted', () => {
     await api.waitStarted('ferry-s-x', 'm_123');
     expect(calls[0].url).toBe('https://api.machines.dev/v1/apps/ferry-s-x/machines/m_123/wait?state=started&timeout=60');
     expect(calls[0].method).toBe('GET');
+    expect(calls[0].headers.authorization).toBe(`Bearer ${TOKEN}`);
   });
 });
 
@@ -117,6 +120,7 @@ describe('FlyApi.destroyApp', () => {
     await api.destroyApp('ferry-s-x');
     expect(calls[0].url).toBe('https://api.machines.dev/v1/apps/ferry-s-x?force=true');
     expect(calls[0].method).toBe('DELETE');
+    expect(calls[0].headers.authorization).toBe(`Bearer ${TOKEN}`);
   });
 });
 
