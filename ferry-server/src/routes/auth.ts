@@ -13,6 +13,7 @@ const LIMIT_BODY = { error: 'Too many attempts. Try again later.' };
 export function authRoutes(app: FastifyInstance, deps: AppDeps): void {
   const loginLimiter = new RateLimiter(LOGIN_MAX_FAILURES, AUTH_WINDOW_MS);
   const signupLimiter = new RateLimiter(deps.authLimits?.signupMax ?? SIGNUP_MAX_ATTEMPTS, AUTH_WINDOW_MS);
+  const cookieOpts = deps.secureCookies ? { ...COOKIE_OPTS, secure: true } : COOKIE_OPTS;
 
   app.post('/api/auth/signup', async (request, reply) => {
     const { email, password } = (request.body ?? {}) as { email?: string; password?: string };
@@ -30,7 +31,7 @@ export function authRoutes(app: FastifyInstance, deps: AppDeps): void {
     }
     const token = newSessionToken();
     deps.store.createSession(token, user.id, sessionExpiry());
-    return reply.setCookie(SESSION_COOKIE, token, COOKIE_OPTS).send({ email: user.email });
+    return reply.setCookie(SESSION_COOKIE, token, cookieOpts).send({ email: user.email });
   });
 
   app.post('/api/auth/login', async (request, reply) => {
@@ -47,7 +48,7 @@ export function authRoutes(app: FastifyInstance, deps: AppDeps): void {
     loginLimiter.clear(key);
     const token = newSessionToken();
     deps.store.createSession(token, user.id, sessionExpiry());
-    return reply.setCookie(SESSION_COOKIE, token, COOKIE_OPTS).send({ email: user.email });
+    return reply.setCookie(SESSION_COOKIE, token, cookieOpts).send({ email: user.email });
   });
 
   app.post('/api/auth/logout', async (request, reply) => {

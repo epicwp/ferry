@@ -89,6 +89,30 @@ describe('auth rate limits', () => {
   });
 });
 
+describe('secure cookie flag', () => {
+  it('adds Secure to the signup session cookie when deps.secureCookies is set', async () => {
+    const { app } = makeApp({ secureCookies: true });
+    const res = await app.inject({ method: 'POST', url: '/api/auth/signup', payload: { email: 'user@example.com', password: 'password1' } });
+    expect(res.statusCode).toBe(200);
+    expect(String(res.headers['set-cookie'])).toMatch(/; secure/i);
+  });
+
+  it('adds Secure to the login session cookie when deps.secureCookies is set', async () => {
+    const { app } = makeApp({ secureCookies: true });
+    await signup(app);
+    const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'user@example.com', password: 'password1' } });
+    expect(res.statusCode).toBe(200);
+    expect(String(res.headers['set-cookie'])).toMatch(/; secure/i);
+  });
+
+  it('omits Secure by default so local http dev keeps working', async () => {
+    const { app } = makeApp();
+    const res = await app.inject({ method: 'POST', url: '/api/auth/signup', payload: { email: 'user@example.com', password: 'password1' } });
+    expect(res.statusCode).toBe(200);
+    expect(String(res.headers['set-cookie'])).not.toMatch(/; secure/i);
+  });
+});
+
 describe('application/json body parsing', () => {
   it('accepts an empty body on a bodyless route (content-type sent, no payload)', async () => {
     const { app } = makeApp();
