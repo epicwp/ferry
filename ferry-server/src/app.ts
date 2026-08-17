@@ -103,6 +103,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   };
   app.decorate('requireUser', requireUser);
 
+  // Deploy verification (spec 2026-08-17 §5): public, and the countUsers() call makes a
+  // wedged DB surface as a failing check instead of a green 200. Response leaks nothing.
+  app.get('/api/health', async () => {
+    deps.store.countUsers();
+    return { ok: true };
+  });
+
   authRoutes(app, deps);
   siteRoutes(app, deps);
   if (deps.engine) {
