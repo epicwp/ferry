@@ -134,48 +134,63 @@ export class FlyEnv implements CloneEnv {
   /** App-per-site on Fly Machines API (spike findings doc §1-3): create app → allocate
    *  IPs → 3GB data volume → machine (sited secret shipped as a boot-time file) → wait
    *  started → poll sited /health until it answers. Idempotent: a profile that already
-   *  points at a live, healthy machine short-circuits (re-pull after a prior provision). */
+   *  points at a live, healthy machine short-circuits (re-pull after a prior provision) -
+   *  the health probe retries 3x/2s apart so one transient blip doesn't trigger a doomed
+   *  re-provision attempt (createApp on an app that's still alive throws).
+   *  Self-cleaning: once createApp has succeeded, any later failure (allocateIps,
+   *  createVolume, createMachine, waitStarted, or the post-start health poll timing out)
+   *  best-effort destroys the half-built app before rethrowing, so a retry starts clean
+   *  instead of dying on "app already exists" against orphaned Fly state. */
   async provision(clonePath: string, info: SiteInfo, name: string): Promise<void> {
     const slug = name;
     const app = FlyEnv.appName(slug);
     const profile = loadProfile(slug);
 
-    if (profile.flySited && (await healthOk(this.sitedBaseUrl(profile.flySited.app, profile.flySited.machineId)))) {
+    if (profile.flySited && (await healthOkRetrying(this.sitedBaseUrl(profile.flySited.app, profile.flySited.machineId), 3, 2000))) {
       return;
     }
 
     await this.flyApi.createApp(app, this.cfg.org);
-    await this.flyApi.allocateIps(app);
-    const volume = await this.flyApi.createVolume(app, 'data', this.cfg.region, 3);
-    const secret = randomBytes(32).toString('hex');
-    const { tag, note } = phpTag(info.php.version);
+    try {
+      await this.flyApi.allocateIps(app);
+      const volume = await this.flyApi.createVolume(app, 'data', this.cfg.region, 3);
+      const secret = randomBytes(32).toString('hex');
+      const { tag, note } = phpTag(info.php.version);
 
-    const machine = await this.flyApi.createMachine(app, this.cfg.region, {
-      image: `${this.cfg.imageRepo}:${tag}`,
-      guest: { cpu_kind: 'shared', cpus: 1, memory_mb: 1024 },
-      mounts: [{ volume: volume.id, path: '/data' }],
-      files: [{ guest_path: '/etc/ferry/sited-secret', raw_value: Buffer.from(secret).toString('base64') }],
-      services: [
-        {
-          protocol: 'tcp',
-          internal_port: 80,
-          ports: [
-            { port: 80, handlers: ['http'] },
-            { port: 443, handlers: ['tls', 'http'] },
-          ],
-        },
-      ],
-      restart: { policy: 'always' },
-    });
-    await this.flyApi.waitStarted(app, machine.id);
+      const machine = await this.flyApi.createMachine(app, this.cfg.region, {
+        image: `${this.cfg.imageRepo}:${tag}`,
+        guest: { cpu_kind: 'shared', cpus: 1, memory_mb: 1024 },
+        mounts: [{ volume: volume.id, path: '/data' }],
+        files: [{ guest_path: '/etc/ferry/sited-secret', raw_value: Buffer.from(secret).toString('base64') }],
+        services: [
+          {
+            protocol: 'tcp',
+            internal_port: 80,
+            ports: [
+              { port: 80, handlers: ['http'] },
+              { port: 443, handlers: ['tls', 'http'] },
+            ],
+          },
+        ],
+        restart: { policy: 'always' },
+      });
+      await this.flyApi.waitStarted(app, machine.id);
 
-    const baseUrl = this.sitedBaseUrl(app, machine.id);
-    if (!(await waitForHealth(baseUrl, 2000, 120_000))) {
-      throw new Error(`fly machine ${machine.id} for app ${app} never answered /health within 120s`);
+      const baseUrl = this.sitedBaseUrl(app, machine.id);
+      if (!(await waitForHealth(baseUrl, 2000, 120_000))) {
+        throw new Error(`fly machine ${machine.id} for app ${app} never answered /health within 120s`);
+      }
+
+      profile.flySited = { app, machineId: machine.id, volumeId: volume.id, secret, ...(note ? { parityNote: note } : {}) };
+      saveProfile(profile);
+    } catch (err) {
+      try {
+        await this.flyApi.destroyApp(app);
+      } catch (cleanupErr) {
+        console.warn(`fly: best-effort cleanup of app "${app}" failed after a provision error`, cleanupErr);
+      }
+      throw err;
     }
-
-    profile.flySited = { app, machineId: machine.id, volumeId: volume.id, secret, ...(note ? { parityNote: note } : {}) };
-    saveProfile(profile);
   }
 
   /** Volumes die with the app (spike-confirmed: `DELETE ?force=true` removes machines
@@ -288,6 +303,17 @@ async function waitForHealth(baseUrl: string, intervalMs: number, timeoutMs: num
     if (Date.now() >= deadline) return false;
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
+}
+
+/** Bounded-attempt variant for the idempotency probe: a fixed retry count (not a wall-clock
+ *  deadline) so one transient blip against an already-provisioned machine doesn't fall through
+ *  to a doomed re-provision attempt (createApp on a still-live app throws). */
+async function healthOkRetrying(baseUrl: string, attempts: number, intervalMs: number): Promise<boolean> {
+  for (let i = 0; i < attempts; i++) {
+    if (await healthOk(baseUrl)) return true;
+    if (i < attempts - 1) await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return false;
 }
 
 function isNotFoundError(err: unknown): boolean {

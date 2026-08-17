@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -282,6 +283,53 @@ describe('FlyEnv', () => {
       const { api, calls } = fakeFlyApi();
       await env({ api }).provision(clonePath, fakeInfo('8.2.15'), SLUG);
       expect(calls).toHaveLength(0);
+    });
+
+    it('idempotency probe retries past one flaky /health response before concluding the machine is still alive', async () => {
+      let hits = 0;
+      const flaky: Server = createServer((_req, res) => {
+        hits++;
+        if (hits === 1) {
+          res.writeHead(500);
+          res.end();
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      });
+      await new Promise<void>((resolve) => flaky.listen(0, '127.0.0.1', resolve));
+      const address = flaky.address();
+      if (address === null || typeof address === 'string') throw new Error('unexpected server address');
+      const flakyUrl = `http://127.0.0.1:${address.port}`;
+
+      saveProfile({
+        url: 'https://example.test', secret: 's', slug: SLUG, clonePath,
+        flySited: { app: 'a', machineId: 'm', volumeId: 'v', secret: SECRET },
+      });
+      const { api, calls } = fakeFlyApi();
+      try {
+        await env({ api, sitedBaseFor: () => flakyUrl }).provision(clonePath, fakeInfo('8.2.15'), SLUG);
+      } finally {
+        await new Promise<void>((resolve) => flaky.close(() => resolve()));
+      }
+
+      expect(hits).toBe(2); // one failed probe, one that succeeded
+      expect(calls).toHaveLength(0); // never fell through to re-provisioning
+    });
+
+    it('self-cleans (destroyApp) when a step after createApp fails, rethrows the original error, and leaves no flySited', async () => {
+      const boom = new Error('createMachine exploded');
+      const { api, calls } = fakeFlyApi();
+      api.createMachine = async (app: string, region: string, config: Record<string, unknown>) => {
+        calls.push({ method: 'createMachine', args: [app, region, config] });
+        throw boom;
+      };
+
+      await expect(env({ api }).provision(clonePath, fakeInfo('8.2.15'), SLUG)).rejects.toThrow(/createMachine exploded/);
+
+      expect(calls.map((c) => c.method)).toEqual(['createApp', 'allocateIps', 'createVolume', 'createMachine', 'destroyApp']);
+      expect(calls.at(-1)).toEqual({ method: 'destroyApp', args: [FlyEnv.appName(SLUG)] });
+      expect(loadProfile(SLUG).flySited).toBeUndefined();
     });
 
     it('carries the sited secret as a files entry, the volume mount at /data, services 80/443, guest 1024MB shared-1x', async () => {
