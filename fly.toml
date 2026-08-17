@@ -1,0 +1,31 @@
+# Ferry control plane — M1 (spec docs/superpowers/specs/2026-08-17-fly-deployment-design.md)
+app = "ferry-cp"
+primary_region = "ams"
+kill_timeout = "20s"   # > the 15s shutdown hard deadline (ferry-server/src/shutdown.ts)
+
+[env]
+  FERRY_HOME = "/data/ferry"
+  FERRY_HOST = "0.0.0.0"
+  FERRY_SECURE_COOKIES = "1"
+  FERRY_MAX_ACCOUNTS = "2"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"   # spec §3
+
+[[mounts]]
+  source = "ferry_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+  auto_stop_machines = "off"   # stable target for the test loop; volume+SQLite stay warm
+  auto_start_machines = true
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/api/health"

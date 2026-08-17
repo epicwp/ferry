@@ -8,3 +8,4 @@ design/*
 !design/README.md
 test-results/
 playwright-report/
+.fly/
