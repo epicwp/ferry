@@ -13,11 +13,15 @@ const LIMIT_BODY = { error: 'Too many attempts. Try again later.' };
 export function authRoutes(app: FastifyInstance, deps: AppDeps): void {
   const loginLimiter = new RateLimiter(LOGIN_MAX_FAILURES, AUTH_WINDOW_MS);
   const signupLimiter = new RateLimiter(deps.authLimits?.signupMax ?? SIGNUP_MAX_ATTEMPTS, AUTH_WINDOW_MS);
+  const cookieOpts = deps.secureCookies ? { ...COOKIE_OPTS, secure: true } : COOKIE_OPTS;
 
   app.post('/api/auth/signup', async (request, reply) => {
     const { email, password } = (request.body ?? {}) as { email?: string; password?: string };
     const retry = signupLimiter.hit(`signup:${request.ip}`);
     if (retry !== null) return reply.code(429).header('retry-after', String(retry)).send(LIMIT_BODY);
+    if (deps.accountCap !== undefined && deps.store.countUsers() >= deps.accountCap) {
+      return reply.code(403).send({ error: 'Signups are closed on this server.' });
+    }
     if (!email || !EMAIL_RE.test(email)) {
       return reply.code(400).send({ error: 'Enter a valid email address.' });
     }
@@ -30,7 +34,7 @@ export function authRoutes(app: FastifyInstance, deps: AppDeps): void {
     }
     const token = newSessionToken();
     deps.store.createSession(token, user.id, sessionExpiry());
-    return reply.setCookie(SESSION_COOKIE, token, COOKIE_OPTS).send({ email: user.email });
+    return reply.setCookie(SESSION_COOKIE, token, cookieOpts).send({ email: user.email });
   });
 
   app.post('/api/auth/login', async (request, reply) => {
@@ -47,7 +51,7 @@ export function authRoutes(app: FastifyInstance, deps: AppDeps): void {
     loginLimiter.clear(key);
     const token = newSessionToken();
     deps.store.createSession(token, user.id, sessionExpiry());
-    return reply.setCookie(SESSION_COOKIE, token, COOKIE_OPTS).send({ email: user.email });
+    return reply.setCookie(SESSION_COOKIE, token, cookieOpts).send({ email: user.email });
   });
 
   app.post('/api/auth/logout', async (request, reply) => {

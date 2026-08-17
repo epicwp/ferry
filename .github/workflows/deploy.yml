@@ -1,0 +1,22 @@
+name: Deploy
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false   # never kill an in-flight deploy; queue instead
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1  # master @ 2026-08-17
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

@@ -43,6 +43,10 @@ export interface AppDeps {
   };
   /** Test seam: e2e runs ~17 signups from one IP against one process; production keeps the default. */
   authLimits?: { signupMax?: number };
+  /** Spec 2026-08-17 §5: Set-Cookie gains `secure` behind TLS (Fly). Unset = local http dev. */
+  secureCookies?: boolean;
+  /** Spec 2026-08-17 §5: hard cap on total accounts (signup → 403 at the cap). Unset = unlimited. */
+  accountCap?: number;
 }
 
 function specFor(change: Change): ChangeSpec {
@@ -98,6 +102,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     request.user = user;
   };
   app.decorate('requireUser', requireUser);
+
+  // Deploy verification (spec 2026-08-17 §5): public, and the countUsers() call makes a
+  // wedged DB surface as a failing check instead of a green 200. Response leaks nothing.
+  app.get('/api/health', async () => {
+    deps.store.countUsers();
+    return { ok: true };
+  });
 
   authRoutes(app, deps);
   siteRoutes(app, deps);

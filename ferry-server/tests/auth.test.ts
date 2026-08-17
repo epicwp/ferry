@@ -89,6 +89,61 @@ describe('auth rate limits', () => {
   });
 });
 
+describe('secure cookie flag', () => {
+  it('adds Secure to the signup session cookie when deps.secureCookies is set', async () => {
+    const { app } = makeApp({ secureCookies: true });
+    const res = await app.inject({ method: 'POST', url: '/api/auth/signup', payload: { email: 'user@example.com', password: 'password1' } });
+    expect(res.statusCode).toBe(200);
+    expect(String(res.headers['set-cookie'])).toMatch(/; secure/i);
+  });
+
+  it('adds Secure to the login session cookie when deps.secureCookies is set', async () => {
+    const { app } = makeApp({ secureCookies: true });
+    await signup(app);
+    const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'user@example.com', password: 'password1' } });
+    expect(res.statusCode).toBe(200);
+    expect(String(res.headers['set-cookie'])).toMatch(/; secure/i);
+  });
+
+  it('omits Secure by default so local http dev keeps working', async () => {
+    const { app } = makeApp();
+    const res = await app.inject({ method: 'POST', url: '/api/auth/signup', payload: { email: 'user@example.com', password: 'password1' } });
+    expect(res.statusCode).toBe(200);
+    expect(String(res.headers['set-cookie'])).not.toMatch(/; secure/i);
+  });
+});
+
+describe('account cap', () => {
+  it('rejects signup with 403 once the cap is reached', async () => {
+    const { app } = makeApp({ accountCap: 2 });
+    await signup(app, 'a@example.com');
+    await signup(app, 'b@example.com');
+    const res = await app.inject({ method: 'POST', url: '/api/auth/signup', payload: { email: 'c@example.com', password: 'password1' } });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({ error: 'Signups are closed on this server.' });
+  });
+
+  it('a cap of 0 closes signup entirely', async () => {
+    const { app } = makeApp({ accountCap: 0 });
+    const res = await app.inject({ method: 'POST', url: '/api/auth/signup', payload: { email: 'a@example.com', password: 'password1' } });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('login keeps working for existing accounts at the cap', async () => {
+    const { app } = makeApp({ accountCap: 1 });
+    await signup(app); // user@example.com / password1
+    const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'user@example.com', password: 'password1' } });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('no cap means unlimited (existing behavior)', async () => {
+    const { app } = makeApp();
+    await signup(app, 'a@example.com');
+    const res = await app.inject({ method: 'POST', url: '/api/auth/signup', payload: { email: 'b@example.com', password: 'password1' } });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
 describe('application/json body parsing', () => {
   it('accepts an empty body on a bodyless route (content-type sent, no payload)', async () => {
     const { app } = makeApp();
