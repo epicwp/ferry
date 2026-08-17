@@ -7,6 +7,7 @@ import { ensureAgentBranch } from './agent/branch.js';
 import type { AgentManager } from './agent/manager.js';
 import { sdkRunner } from './agent/sdk-runner.js';
 import { ChangeService, type CreateChangeInput } from './changes.js';
+import { accountCap, listenHost, secureCookies } from './env-config.js';
 import { applyEnvFile } from './env-file.js';
 import { realEngine, realPushRunner } from './engine.js';
 import { Lifecycle } from './lifecycle.js';
@@ -78,11 +79,14 @@ const app = buildApp({
   agent: agentDepsForMain,
   push: { runner: realPushRunner() },
   lifecycle,
+  secureCookies: secureCookies(process.env),
+  accountCap: accountCap(process.env),
 });
 
 const port = Number(process.env.PORT ?? 4000);
-await app.listen({ port, host: '127.0.0.1' });
-console.log(`ferry-server listening on http://127.0.0.1:${port}`);
+const host = listenHost(process.env);
+await app.listen({ port, host });
+console.log(`ferry-server listening on http://${host}:${port}`);
 if (recovered > 0) {
   console.log(`  ${recovered} interrupted sync(s) marked as error after restart`);
 }
