@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { makeApp, signup, stubEngine } from './helpers/testApp.js';
+import { scriptedRunner } from '../src/agent/scripted-runner.js';
+import { agentDeps, makeApp, signup, stubEngine } from './helpers/testApp.js';
 
 describe('site routes', () => {
   it('creates a site with derived slug and lists it', async () => {
@@ -103,5 +104,29 @@ describe('site routes', () => {
 
     const check = await app.inject({ method: 'GET', url: `/api/sites/${siteId}`, headers: { cookie } });
     expect(check.statusCode).toBe(404);
+  });
+
+  it('refuses to delete while the agent is active, and does not call destroyClone', async () => {
+    let destroyCalls = 0;
+    const engine = stubEngine({ destroyClone: () => { destroyCalls++; return Promise.resolve(); } });
+    const { app, store } = makeApp({ engine, agent: agentDeps(scriptedRunner()) });
+    const cookie = await signup(app);
+    const created = await app.inject({
+      method: 'POST', url: '/api/sites', headers: { cookie },
+      payload: { name: 'S', url: 'https://example.com' },
+    });
+    const siteId = created.json().id as number;
+    store.setStatus(siteId, 'ready');
+    await app.inject({
+      method: 'POST', url: `/api/sites/${siteId}/agent/messages`, headers: { cookie }, payload: { text: 'hi' },
+    });
+
+    const res = await app.inject({ method: 'DELETE', url: `/api/sites/${siteId}`, headers: { cookie } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'Site is busy — wait for the current sync, agent turn, or push to finish.' });
+    expect(destroyCalls).toBe(0);
+
+    const check = await app.inject({ method: 'GET', url: `/api/sites/${siteId}`, headers: { cookie } });
+    expect(check.statusCode).toBe(200);
   });
 });

@@ -11,7 +11,7 @@ import type { ChangeSpec, PushRunner } from './push/types.js';
 import { agentRoutes } from './routes/agent.js';
 import { authRoutes } from './routes/auth.js';
 import { changesRoutes } from './routes/changes.js';
-import { siteRoutes } from './routes/sites.js';
+import { siteDeleteRoute, siteRoutes } from './routes/sites.js';
 import { syncRoutes } from './routes/sync.js';
 import { SyncManager } from './sync.js';
 import type { Change, Store, User } from './store.js';
@@ -135,6 +135,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (push) lifecycle.pushBusy = () => push.isPushingAny();
     if (push) void push.recover().catch((err) => console.error('push recovery failed:', err));
     syncRoutes(app, deps, sync, agents, push);
+    siteDeleteRoute(app, deps, sync, agents, push);
     if (agents) agentRoutes(app, deps, agents, sync, push);
     if (push) changesRoutes(app, deps, push, sync, agents);
   }
