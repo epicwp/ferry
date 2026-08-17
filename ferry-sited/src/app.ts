@@ -12,6 +12,7 @@ export interface SitedDeps {
 }
 
 const TABLE_RE = /^[A-Za-z0-9_]+$/;
+const BINLOG_FILE_RE = /^[A-Za-z0-9.\-]+$/;
 
 // Origin: ferry-cli/src/env/ddev.ts parseShowColumns — sited ships alone into the site image, so the logic is copied.
 function parseShowColumns(stdout: string): { fields: string[]; pkCols: string[] } {
@@ -79,6 +80,17 @@ export function buildSited(deps: SitedDeps): FastifyInstance {
       return parseShowColumns(stdout);
     }
     return reply.code(400).send({ error: 'unknown kind' });
+  });
+
+  app.get('/binlog', { preHandler: verify }, async (request, reply) => {
+    const { file, position } = request.query as { file?: string; position?: string };
+    if (!file || !BINLOG_FILE_RE.test(file)) return reply.code(400).send({ error: 'invalid file' });
+    const { stdout } = await deps.exec(
+      'mysqlbinlog',
+      ['--no-defaults', '--base64-output=decode-rows', '-v', `--start-position=${position}`, `/data/mysql/${file}`],
+      { timeoutMs: 120_000 },
+    );
+    return { stdout };
   });
 
   app.post('/wp', { preHandler: verify }, async (request) => {
