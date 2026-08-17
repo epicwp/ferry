@@ -39,6 +39,25 @@ export const BINLOG_CNF = [
   '',
 ].join('\n');
 
+export interface TableColumns {
+  fields: string[];
+  pkCols: string[];
+}
+
+/** `SHOW COLUMNS FROM <table>` is `Field\tType\tNull\tKey\tDefault\tExtra` - Key='PRI' marks a
+ *  primary-key column (every column of a composite key is marked, not just one). */
+export function parseShowColumns(stdout: string): TableColumns {
+  const lines = stdout.trim().split('\n').slice(1).filter((l) => l.length > 0);
+  const fields: string[] = [];
+  const pkCols: string[] = [];
+  for (const line of lines) {
+    const [field, , , key] = line.split('\t');
+    fields.push(field);
+    if (key === 'PRI') pkCols.push(field);
+  }
+  return { fields, pkCols };
+}
+
 export interface CloneEnv {
   provision(clonePath: string, info: SiteInfo, name: string): Promise<void>;
   importDb(clonePath: string, dumpFile: string): Promise<void>;
@@ -46,6 +65,11 @@ export interface CloneEnv {
   url(name: string): string;
   binlogPosition(clonePath: string): Promise<{ file: string; position: number }>;
   extractBinlog(clonePath: string, pos: { file: string; position: number }): Promise<string>;
+  showColumns(clonePath: string, table: string): Promise<TableColumns>;
+  /** Ship the docroot to wherever the clone is served. Local envs serve in place: no-op. */
+  deployFiles(clonePath: string): Promise<void>;
+  /** Tear down everything provision() created for this clone name. */
+  destroy(name: string): Promise<void>;
 }
 
 export class DdevEnv implements CloneEnv {
@@ -98,4 +122,13 @@ export class DdevEnv implements CloneEnv {
     );
     return stdout;
   }
+
+  async showColumns(clonePath: string, table: string): Promise<TableColumns> {
+    const { stdout } = await run('ddev', ['mysql', '-e', `SHOW COLUMNS FROM ${table}`], { cwd: clonePath });
+    return parseShowColumns(stdout);
+  }
+
+  async deployFiles(): Promise<void> {} // DDEV serves the docroot in place
+
+  async destroy(): Promise<void> {} // matches today's behavior: site delete never removed DDEV projects
 }

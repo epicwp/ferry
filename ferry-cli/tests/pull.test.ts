@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { CloneEnv } from '../src/env/ddev.js';
+import type { CloneEnv, TableColumns } from '../src/env/ddev.js';
 import { saveProfile, type SiteInfo } from '../src/profile.js';
 import { pull } from '../src/pull.js';
 import { hashOf, startMockPlugin, sizeOf, type MockPlugin } from './helpers/mockPlugin.js';
@@ -36,6 +36,9 @@ class FakeEnv implements CloneEnv {
   async extractBinlog(): Promise<string> {
     return '';
   }
+  async showColumns(): Promise<TableColumns> { return { fields: [], pkCols: [] }; }
+  async deployFiles(): Promise<void> { this.calls.push('deployFiles'); }
+  async destroy(): Promise<void> {}
 }
 
 const siteInfo = (over: Partial<SiteInfo> = {}): SiteInfo => ({

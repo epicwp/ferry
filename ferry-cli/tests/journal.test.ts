@@ -2,8 +2,10 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { classify, parseBinlog, writeJournal } from '../src/journal.js';
+import { classify, journalCandidates, parseBinlog, writeJournal } from '../src/journal.js';
+import { saveProfile } from '../src/profile.js';
 import type { DbOp } from '../src/push-types.js';
+import type { CloneEnv, TableColumns } from '../src/env/ddev.js';
 
 const FIXTURES = join(__dirname, '..', 'test-fixtures', 'binlog');
 const read = (name: string): string => readFileSync(join(FIXTURES, name), 'utf8');
@@ -232,5 +234,56 @@ describe('writeJournal', () => {
     const lines = readFileSync(join(dir, 'journal.ndjson'), 'utf8').trim().split('\n');
     expect(lines).toHaveLength(2);
     expect(lines.map((l) => JSON.parse(l))).toEqual(ops);
+  });
+});
+
+const RAW = [
+  "### UPDATE `db`.`wp_options`",
+  '### WHERE',
+  '###   @1=7',
+  "###   @2='blogname'",
+  "###   @3='Old'",
+  '### SET',
+  '###   @1=7',
+  "###   @2='blogname'",
+  "###   @3='New'",
+].join('\n');
+
+class JournalFakeEnv implements CloneEnv {
+  columnsAsked: string[] = [];
+  async provision(): Promise<void> {}
+  async importDb(): Promise<void> {}
+  async createAdmin(): Promise<{ user: string; password: string }> { return { user: 'u', password: 'p' }; }
+  url(name: string): string { return `https://${name}.example`; }
+  async binlogPosition(): Promise<{ file: string; position: number }> { return { file: 'f', position: 4 }; }
+  async extractBinlog(): Promise<string> { return RAW; }
+  async showColumns(_clonePath: string, table: string): Promise<TableColumns> {
+    this.columnsAsked.push(table);
+    return { fields: ['option_id', 'option_name', 'option_value'], pkCols: ['option_id'] };
+  }
+  async deployFiles(): Promise<void> {}
+  async destroy(): Promise<void> {}
+}
+
+describe('journalCandidates', () => {
+  it('resolves columns through the env seam and classifies the op', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'ferry-journal-'));
+    process.env.FERRY_HOME = home;
+    try {
+      saveProfile({
+        url: 'https://prod.example', secret: 's', slug: 'jtest',
+        clonePath: join(home, 'clones', 'jtest'),
+        info: { prefix: 'wp_' } as never,
+        binlog: { file: 'f', position: 4 },
+      });
+      const env = new JournalFakeEnv();
+      const result = await journalCandidates('jtest', env);
+      expect(env.columnsAsked).toEqual(['wp_options']);
+      expect(result.ops).toHaveLength(1);
+      expect(result.refusedCount).toBe(0);
+    } finally {
+      delete process.env.FERRY_HOME;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
