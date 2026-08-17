@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -65,6 +65,18 @@ async function buildAbsoluteTarGz(): Promise<Buffer> {
   return buf;
 }
 
+/** Builds a tar.gz whose single entry is a real symlink (tar packs it as a SymbolicLink entry, not its target's content). */
+async function buildSymlinkTarGz(): Promise<Buffer> {
+  const root = mkdtempSync(join(tmpdir(), 'sited-evil-symlink-'));
+  symlinkSync('/etc/passwd', join(root, 'evil-link'));
+  const outFile = join(tmpdir(), `sited-evil-symlink-${randomBytes(4).toString('hex')}.tar.gz`);
+  await tar.create({ gzip: true, cwd: root, file: outFile, portable: true }, ['evil-link']);
+  const buf = await readFile(outFile);
+  rmSync(root, { recursive: true, force: true });
+  rmSync(outFile, { force: true });
+  return buf;
+}
+
 describe('PUT /files', () => {
   let docroot: string | undefined;
 
@@ -97,6 +109,17 @@ describe('PUT /files', () => {
 
     const absRes = await injectRaw(app, 'PUT', '/files', await buildAbsoluteTarGz());
     expect(absRes.statusCode).toBe(400);
+    expect(existsSync(join(docroot, 'keep.txt'))).toBe(true);
+    expect(existsSync(`${docroot}.new`)).toBe(false);
+  });
+
+  it('rejects symlink entries with 400 and leaves the docroot untouched', async () => {
+    docroot = mkdtempSync(join(tmpdir(), 'sited-docroot-'));
+    writeFileSync(join(docroot, 'keep.txt'), 'still here');
+    const app = buildSited({ secret: SECRET, docroot, exec: noopExec });
+
+    const res = await injectRaw(app, 'PUT', '/files', await buildSymlinkTarGz());
+    expect(res.statusCode).toBe(400);
     expect(existsSync(join(docroot, 'keep.txt'))).toBe(true);
     expect(existsSync(`${docroot}.new`)).toBe(false);
   });

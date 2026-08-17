@@ -1,7 +1,7 @@
 import * as fsp from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { x as tarExtract } from 'tar';
+import { x as tarExtract, type ReadEntry } from 'tar';
 import { makeVerify } from './verify.js';
 export { sitedCanonical } from './verify.js';
 
@@ -27,13 +27,18 @@ function parseShowColumns(stdout: string): { fields: string[]; pkCols: string[] 
 }
 
 /** Extracts a gzipped tar `buffer` into `dest`, rejecting (throwing on) any entry
- *  whose path is absolute or contains a `..` segment. */
+ *  whose path is absolute or contains a `..` segment, or that is a symlink/hardlink
+ *  (the docroot never legitimately contains one; don't rely on tar's own defanging). */
 async function extractTar(buffer: Buffer, dest: string): Promise<void> {
   const stream = tarExtract({
     cwd: dest,
-    filter: (entryPath) => {
+    filter: (entryPath, entry) => {
       if (entryPath.startsWith('/') || entryPath.split('/').includes('..')) {
         throw new Error(`unsafe tar entry: ${entryPath}`);
+      }
+      const type = (entry as ReadEntry).type;
+      if (type === 'SymbolicLink' || type === 'Link') {
+        throw new Error(`unsafe tar entry: ${entryPath} (${type})`);
       }
       return true;
     },
