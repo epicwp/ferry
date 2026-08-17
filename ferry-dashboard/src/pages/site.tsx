@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { agentContext, api, ApiError, listChanges, type AgentContext, type Site, type SiteStatus } from '../api';
+import { agentContext, api, ApiError, listChanges, type AgentContext, type Site, type SiteStatus, type SyncState } from '../api';
 import { AgentChat } from '../chat';
 import { Logo } from '../layout';
 
@@ -61,6 +61,7 @@ export function SitePage() {
   const { id } = useParams();
   const [site, setSite] = useState<Site | null>(null);
   const [context, setContext] = useState<AgentContext | null>(null);
+  const [sync, setSync] = useState<SyncState | null>(null);
   const [loadError, setLoadError] = useState('');
   const [draftCount, setDraftCount] = useState(0);
   const navigate = useNavigate();
@@ -80,6 +81,12 @@ export function SitePage() {
 
   useEffect(() => {
     void listChanges(Number(id), 'draft').then((r) => setDraftCount(r.changes.length)).catch(() => undefined);
+  }, [id]);
+
+  useEffect(() => {
+    const es = new EventSource(`/api/sites/${id}/sync/events`);
+    es.onmessage = (ev) => setSync(JSON.parse(ev.data) as SyncState);
+    return () => es.close();
   }, [id]);
 
   if (loadError) {
@@ -111,7 +118,7 @@ export function SitePage() {
       <aside className="rail">
         <div className="rail-card">
           <div className="rail-card__title">Environment</div>
-          <div className="rail-row"><span>Clone</span><span className="mono">{site.slug}.ddev.site</span></div>
+          <div className="rail-row"><span>Clone</span><span className="mono">{sync?.cloneUrl ? new URL(sync.cloneUrl).host : '—'}</span></div>
           {context?.environment.wp && <div className="rail-row"><span>WordPress</span><span className="mono">{context.environment.wp}</span></div>}
           {context?.environment.php && <div className="rail-row"><span>PHP</span><span className="mono">{context.environment.php}</span></div>}
           {context?.environment.db && <div className="rail-row"><span>Database</span><span className="mono">{context.environment.db}</span></div>}
