@@ -106,4 +106,17 @@ export function siteRoutes(app: FastifyInstance, deps: AppDeps): void {
       return reply.code(502).send({ error: message });
     }
   });
+
+  app.delete('/api/sites/:id', { preHandler: app.requireUser }, async (request, reply) => {
+    const site = deps.store.siteFor(request.user.id, Number((request.params as { id: string }).id));
+    if (!site) return reply.code(404).send({ error: 'Site not found.' });
+    try {
+      await engine.destroyClone(site.slug);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`destroyClone failed for site ${site.slug}: ${message}`);
+    }
+    deps.store.deleteSite(request.user.id, site.id);
+    return reply.code(204).send();
+  });
 }

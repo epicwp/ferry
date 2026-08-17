@@ -63,4 +63,45 @@ describe('site routes', () => {
     expect(limited.headers['retry-after']).toBeDefined();
     expect(linkCalls).toBe(5);
   });
+
+  it('deletes a ready site: destroyClone runs with the slug, then the row is gone', async () => {
+    const destroyed: string[] = [];
+    const engine = stubEngine({
+      destroyClone: (slug) => { destroyed.push(slug); return Promise.resolve(); },
+    });
+    const { app, store } = makeApp({ engine });
+    const cookie = await signup(app);
+    const created = await app.inject({
+      method: 'POST', url: '/api/sites', headers: { cookie },
+      payload: { name: 'S', url: 'https://example.com' },
+    });
+    const siteId = created.json().id as number;
+    const slug = created.json().slug as string;
+    store.setStatus(siteId, 'ready');
+
+    const res = await app.inject({ method: 'DELETE', url: `/api/sites/${siteId}`, headers: { cookie } });
+    expect(res.statusCode).toBe(204);
+    expect(destroyed).toEqual([slug]);
+
+    const check = await app.inject({ method: 'GET', url: `/api/sites/${siteId}`, headers: { cookie } });
+    expect(check.statusCode).toBe(404);
+  });
+
+  it('deletes the site row even when destroyClone throws', async () => {
+    const engine = stubEngine({ destroyClone: () => Promise.reject(new Error('fly api boom')) });
+    const { app, store } = makeApp({ engine });
+    const cookie = await signup(app);
+    const created = await app.inject({
+      method: 'POST', url: '/api/sites', headers: { cookie },
+      payload: { name: 'S', url: 'https://example.com' },
+    });
+    const siteId = created.json().id as number;
+    store.setStatus(siteId, 'ready');
+
+    const res = await app.inject({ method: 'DELETE', url: `/api/sites/${siteId}`, headers: { cookie } });
+    expect(res.statusCode).toBe(204);
+
+    const check = await app.inject({ method: 'GET', url: `/api/sites/${siteId}`, headers: { cookie } });
+    expect(check.statusCode).toBe(404);
+  });
 });

@@ -24,6 +24,7 @@ export interface Engine {
   siteInfo(slug: string): Promise<SiteInfo>;
   verifyClone(url: string): Promise<VerifyResult>;
   cloneUrl(slug: string): string;
+  destroyClone(slug: string): Promise<void>;
 }
 
 export interface RealEngineOptions {
@@ -82,6 +83,9 @@ export function realEngine(opts: RealEngineOptions = {}): Engine {
     },
     cloneUrl(slug) {
       return env.url(slug);
+    },
+    async destroyClone(slug) {
+      await env.destroy(slug);
     },
   };
 }

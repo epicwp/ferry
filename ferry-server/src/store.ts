@@ -357,6 +357,11 @@ export class Store {
     }
   }
 
+  /** Scoped by user, like siteFor. Returns whether a row was actually deleted. */
+  deleteSite(userId: number, id: number): boolean {
+    return this.db.prepare('DELETE FROM sites WHERE id = ? AND user_id = ?').run(id, userId).changes > 0;
+  }
+
   recoverInterruptedSyncs(): number {
     const info = this.db
       .prepare("UPDATE sites SET status = 'error', last_error = ? WHERE status = 'syncing'")
