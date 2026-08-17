@@ -66,4 +66,21 @@ describe('GET /binlog', () => {
     const bad = await injectGet(app, '/binlog', { file: '../etc/passwd', position: '0' });
     expect(bad.statusCode).toBe(400);
   });
+
+  it('rejects a non-integer position with 400', async () => {
+    const exec: SitedDeps['exec'] = async () => {
+      throw new Error('exec should not run for an invalid position');
+    };
+    const app = buildSited({ secret: SECRET, docroot: '/tmp', exec });
+    const res = await injectGet(app, '/binlog', { file: 'ferry-bin.000002', position: '12a' });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 500 with a stderr excerpt when mysqlbinlog exits non-zero', async () => {
+    const exec: SitedDeps['exec'] = async () => ({ stdout: '', stderr: 'ERROR: could not find target log', exitCode: 1 });
+    const app = buildSited({ secret: SECRET, docroot: '/tmp', exec });
+    const res = await injectGet(app, '/binlog', { file: 'ferry-bin.000002', position: '1234' });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toContain('could not find target log');
+  });
 });

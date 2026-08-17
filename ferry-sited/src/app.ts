@@ -85,11 +85,13 @@ export function buildSited(deps: SitedDeps): FastifyInstance {
   app.get('/binlog', { preHandler: verify }, async (request, reply) => {
     const { file, position } = request.query as { file?: string; position?: string };
     if (!file || !BINLOG_FILE_RE.test(file)) return reply.code(400).send({ error: 'invalid file' });
-    const { stdout } = await deps.exec(
+    if (!position || !/^\d+$/.test(position)) return reply.code(400).send({ error: 'invalid position' });
+    const { stdout, exitCode, stderr } = await deps.exec(
       'mysqlbinlog',
       ['--no-defaults', '--base64-output=decode-rows', '-v', `--start-position=${position}`, `/data/mysql/${file}`],
       { timeoutMs: 120_000 },
     );
+    if (exitCode !== 0) return reply.code(500).send({ error: stderr.slice(0, 500) });
     return { stdout };
   });
 
@@ -122,6 +124,7 @@ export function buildSited(deps: SitedDeps): FastifyInstance {
     await fsp.rename(deps.docroot, old).catch(() => {}); // first deploy: docroot may not exist yet
     await fsp.rename(next, deps.docroot);
     await fsp.rm(old, { recursive: true, force: true });
+    await deps.exec('chown', ['-R', 'www-data:www-data', deps.docroot]); // best-effort: local smoke runs unprivileged
     return reply.code(204).send();
   });
 

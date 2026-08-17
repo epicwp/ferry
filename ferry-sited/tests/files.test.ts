@@ -123,4 +123,18 @@ describe('PUT /files', () => {
     expect(existsSync(join(docroot, 'keep.txt'))).toBe(true);
     expect(existsSync(`${docroot}.new`)).toBe(false);
   });
+
+  it('chowns the docroot to www-data after a successful swap', async () => {
+    docroot = mkdtempSync(join(tmpdir(), 'sited-docroot-'));
+    const calls: { cmd: string; args: string[] }[] = [];
+    const exec: SitedDeps['exec'] = async (cmd, args) => {
+      calls.push({ cmd, args });
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+    const tarball = await buildTarGz({ 'index.php': '<?php echo "hi";' });
+    const app = buildSited({ secret: SECRET, docroot, exec });
+    const res = await injectRaw(app, 'PUT', '/files', tarball);
+    expect(res.statusCode).toBe(204);
+    expect(calls).toContainEqual({ cmd: 'chown', args: ['-R', 'www-data:www-data', docroot] });
+  });
 });

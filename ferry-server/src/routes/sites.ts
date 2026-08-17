@@ -129,6 +129,7 @@ export function siteDeleteRoute(app: FastifyInstance, deps: AppDeps, sync: SyncM
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.warn(`destroyClone failed for site ${site.slug}: ${message}`);
+      return reply.code(502).send({ error: 'Clone teardown failed — try again.' });
     }
     deps.store.deleteSite(request.user.id, site.id);
     return reply.code(204).send();

@@ -88,7 +88,7 @@ describe('site routes', () => {
     expect(check.statusCode).toBe(404);
   });
 
-  it('deletes the site row even when destroyClone throws', async () => {
+  it('keeps the site row and returns 502 when destroyClone throws', async () => {
     const engine = stubEngine({ destroyClone: () => Promise.reject(new Error('fly api boom')) });
     const { app, store } = makeApp({ engine });
     const cookie = await signup(app);
@@ -100,10 +100,11 @@ describe('site routes', () => {
     store.setStatus(siteId, 'ready');
 
     const res = await app.inject({ method: 'DELETE', url: `/api/sites/${siteId}`, headers: { cookie } });
-    expect(res.statusCode).toBe(204);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'Clone teardown failed — try again.' });
 
     const check = await app.inject({ method: 'GET', url: `/api/sites/${siteId}`, headers: { cookie } });
-    expect(check.statusCode).toBe(404);
+    expect(check.statusCode).toBe(200);
   });
 
   it('refuses to delete while the agent is active, and does not call destroyClone', async () => {

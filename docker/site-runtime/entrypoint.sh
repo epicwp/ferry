@@ -4,6 +4,7 @@ grep -q ' db$' /etc/hosts || echo '127.0.0.1 db' >> /etc/hosts   # overlay wp-co
 mkdir -p /data/www /data/mysql
 chown -R www-data:www-data /data/www
 mkdir -p /run/mysqld && chown mysql:mysql /run/mysqld   # not created by the wordpress base image; mariadbd needs it for its unix socket
+[ -f /etc/ferry/sited-secret ] && chmod 600 /etc/ferry/sited-secret
 if [ ! -d /data/mysql/mysql ]; then
   chown -R mysql:mysql /data/mysql
   mariadb-install-db --user=mysql --datadir=/data/mysql >/dev/null

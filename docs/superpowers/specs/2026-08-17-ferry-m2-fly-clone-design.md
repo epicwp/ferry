@@ -185,6 +185,7 @@ to the fly.dev clone URL.
   `FERRY_HOME` scope, or an in-process store) — design detail for the M2b
   plan.
 - Reconsider agent-in-site-machine with M2a's experience in hand.
+- Move the org-scoped Fly token out of the agent-shell blast radius (same class as the write secret: /proc environ exposure on ferry-cp) — narrower token or process isolation.
 
 ## 11. M2a success criteria
 

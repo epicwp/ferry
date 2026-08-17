@@ -15,6 +15,7 @@ const DEAD_WPORG = { api: 'http://127.0.0.1:1', downloads: 'http://127.0.0.1:1' 
 class FakeEnv implements CloneEnv {
   calls: string[] = [];
   wpConfigPresentAtImport = false;
+  constructor(readonly cloneWebserver?: 'apache') {}
   async provision(clonePath: string, info: SiteInfo, name: string): Promise<void> {
     this.calls.push('provision');
     // Mirrors FlyEnv.provision: loads the profile, writes substrate state, saves it back -
@@ -148,6 +149,31 @@ describe('pull', () => {
     expect(ignored('wp-config.php')).toBe(true);
     expect(ignored('wp-content/mu-plugins/ferry-overlay.php')).toBe(true);
     expect(ignored('CLAUDE.md')).toBe(true);
+  });
+
+  it('writes the uploads .htaccess fallback exactly when the env forces Apache, regardless of production server', async () => {
+    const manifest = [
+      'index.php',
+      'wp-load.php',
+      'wp-content/object-cache.php',
+      'wp-content/plugins/foo/.git/HEAD',
+      'wp-content/plugins/foo/plugin.php',
+    ].map((p) => ({ path: p, size: sizeOf(fixture, p), hash: null }));
+    mock = await startMockPlugin(fixture, {
+      info: siteInfo(), // server: 'nginx'
+      manifest,
+      dbTables: [{
+        name: 'wp_options', rows: 1, bytes: 10, pk: 'option_id', maxpk: 1,
+        batches: [{ sql: 'INSERT INTO `wp_options` VALUES (1);\n', lastKey: 1, complete: true }],
+      }],
+    });
+    pair(mock.base);
+
+    await pull('fixture', { env: new FakeEnv(), wporg: DEAD_WPORG });
+    expect(existsSync(join(clonePath, '.htaccess'))).toBe(false);
+
+    await pull('fixture', { env: new FakeEnv('apache'), wporg: DEAD_WPORG });
+    expect(existsSync(join(clonePath, '.htaccess'))).toBe(true);
   });
 
   it('refuses multisite before transferring anything', async () => {

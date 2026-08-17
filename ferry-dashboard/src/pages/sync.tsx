@@ -92,7 +92,7 @@ export function SyncPage() {
           <span className="sync-panel__avatar mono">{site.name.charAt(0).toUpperCase()}</span>
           <span className="sync-panel__title">
             <span className="sync-panel__name">{site.name}</span>
-            <span className="mono sync-panel__sub">production → DDEV clone</span>
+            <span className="mono sync-panel__sub">production → clone</span>
           </span>
           {sync.status === 'syncing' && <span className="sync-panel__badge mono">running</span>}
           {sync.status === 'ready' && <span className="sync-panel__badge sync-panel__badge--ok mono">verified</span>}

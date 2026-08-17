@@ -116,6 +116,7 @@ export function flyConfigFromEnv(env: NodeJS.ProcessEnv): FlyEnvConfig {
 }
 
 export class FlyEnv implements CloneEnv {
+  readonly cloneWebserver = 'apache' as const;
   private readonly flyApi: FlyApiClient;
 
   constructor(private readonly cfg: FlyEnvConfig) {
@@ -156,6 +157,10 @@ export class FlyEnv implements CloneEnv {
       const volume = await this.flyApi.createVolume(app, 'data', this.cfg.region, 3);
       const secret = randomBytes(32).toString('hex');
       const { tag, note } = phpTag(info.php.version);
+      const webserverNote = info.server !== 'apache'
+        ? `Webserver parity gap: production runs ${info.server}, clone serves Apache.`
+        : undefined;
+      const parityNote = [note, webserverNote].filter((n): n is string => Boolean(n)).join(' ') || undefined;
 
       const machine = await this.flyApi.createMachine(app, this.cfg.region, {
         image: `${this.cfg.imageRepo}:${tag}`,
@@ -181,7 +186,7 @@ export class FlyEnv implements CloneEnv {
         throw new Error(`fly machine ${machine.id} for app ${app} never answered /health within 120s`);
       }
 
-      profile.flySited = { app, machineId: machine.id, volumeId: volume.id, secret, ...(note ? { parityNote: note } : {}) };
+      profile.flySited = { app, machineId: machine.id, volumeId: volume.id, secret, ...(parityNote ? { parityNote } : {}) };
       saveProfile(profile);
     } catch (err) {
       try {

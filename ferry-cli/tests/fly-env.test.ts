@@ -332,6 +332,23 @@ describe('FlyEnv', () => {
       expect(loadProfile(SLUG).flySited).toBeUndefined();
     });
 
+    it('records a webserver parity note when production runs nginx (clone always serves Apache)', async () => {
+      const { api } = fakeFlyApi();
+      await env({ api }).provision(clonePath, { ...fakeInfo('8.2.15'), server: 'nginx' }, SLUG);
+      const note = loadProfile(SLUG).flySited?.parityNote;
+      expect(note).toBe('Webserver parity gap: production runs nginx, clone serves Apache.');
+    });
+
+    it('combines the php parity note and the webserver parity note when both gaps exist', async () => {
+      const { api } = fakeFlyApi();
+      await env({ api }).provision(clonePath, { ...fakeInfo('7.4.33'), server: 'nginx' }, SLUG);
+      const note = loadProfile(SLUG).flySited?.parityNote;
+      expect(note).toBe(
+        'PHP parity gap: production runs 7.4.33, clone runs 8.1 (nearest supported). '
+        + 'Webserver parity gap: production runs nginx, clone serves Apache.',
+      );
+    });
+
     it('carries the sited secret as a files entry, the volume mount at /data, services 80/443, guest 1024MB shared-1x', async () => {
       const { api, calls } = fakeFlyApi();
       await env({ api }).provision(clonePath, fakeInfo('8.2.15'), SLUG);

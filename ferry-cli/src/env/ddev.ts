@@ -59,6 +59,8 @@ export function parseShowColumns(stdout: string): TableColumns {
 }
 
 export interface CloneEnv {
+  /** Set when the substrate always serves Apache regardless of production; absent = clone mirrors production's server. */
+  readonly cloneWebserver?: 'apache';
   provision(clonePath: string, info: SiteInfo, name: string): Promise<void>;
   importDb(clonePath: string, dumpFile: string): Promise<void>;
   createAdmin(clonePath: string): Promise<{ user: string; password: string }>;
