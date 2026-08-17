@@ -16,6 +16,7 @@ kill_timeout = "20s"   # > the 15s shutdown hard deadline (ferry-server/src/shut
 [[mounts]]
   source = "ferry_data"
   destination = "/data"
+  initial_size = "3gb"
 
 [http_service]
   internal_port = 4000
