@@ -29,6 +29,9 @@ export interface AppDeps {
     cloneDir: (slug: string) => string;
     ensureBranch: (cloneDir: string) => Promise<void>;
     idleMs?: number;
+    /** Fly mode: deploy the clone's working tree after each turn (main.ts wires this to
+     *  FlyEnv.deployFiles). Unset on ddev, where the clone's docroot is already live on disk. */
+    afterTurn?: (slug: string) => Promise<void>;
     // Passthroughs for the /changes routes (Task 13) to consume from `deps` directly —
     // main.ts wires the real ones (ChangeService/journalCandidates); tests inject fakes.
     journalCandidates?: (slug: string) => Promise<unknown>;
@@ -128,6 +131,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
           cloneDir: deps.agent.cloneDir,
           ensureBranch: deps.agent.ensureBranch,
           idleMs: deps.agent.idleMs,
+          afterTurn: deps.agent.afterTurn,
         })
       : undefined;
     if (agents) deps.agent?.onManagerReady?.(agents);

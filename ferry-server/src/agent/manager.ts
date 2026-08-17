@@ -5,10 +5,13 @@ export interface AgentManagerOpts {
   cloneDir: (slug: string) => string;
   ensureBranch: (cloneDir: string) => Promise<void>;
   idleMs?: number;
+  /** Fired fire-and-forget after each turn ends (e.g. FlyEnv.deployFiles pushing the clone's
+   *  working tree to the site's Fly machine). Errors are logged, never surfaced to the chat. */
+  afterTurn?: (slug: string) => Promise<void>;
 }
 
 type Listener = (e: AgentWireEvent) => void;
-interface Hot { sessionId: number; handle: AgentHandle; idleTimer?: NodeJS.Timeout }
+interface Hot { sessionId: number; slug: string; handle: AgentHandle; idleTimer?: NodeJS.Timeout }
 
 /**
  * Per-site agent session machine (design §Architecture). Hot state (the SDK subprocess)
@@ -120,7 +123,7 @@ export class AgentManager {
     const spawnPromise = (async () => {
       const cloneDir = this.opts.cloneDir(site.slug);
       await this.opts.ensureBranch(cloneDir);
-      const hot: Hot = { sessionId, handle: undefined as unknown as AgentHandle };
+      const hot: Hot = { sessionId, slug: site.slug, handle: undefined as unknown as AgentHandle };
       hot.handle = this.runner.start({
         cloneDir,
         slug: site.slug,
@@ -171,6 +174,9 @@ export class AgentManager {
         });
         this.store.setAgentSessionStatus(sessionId, 'idle');
         this.store.touchAgentSession(sessionId);
+        if (this.opts.afterTurn && hot?.slug) {
+          this.opts.afterTurn(hot.slug).catch((err) => console.error('afterTurn failed:', err));
+        }
         return;
       case 'runner_error':
         console.error(`agent runner error (site ${siteId}, session ${sessionId}):`, event.message);

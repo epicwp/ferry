@@ -230,4 +230,46 @@ describe('AgentManager', () => {
     expect(() => manager.appendSystemEvent(site.id, 'change_card', { changeId: 1 })).not.toThrow();
     expect(store.currentAgentSession(site.id)).toBeUndefined();
   });
+
+  it('fires afterTurn once with the site slug when a turn ends', async () => {
+    const store = new Store(':memory:');
+    const user = store.createUser('a@example.com', 'h')!;
+    const site = store.createSite(user.id, 'S', 'https://klant.nl', 'klant-nl')!;
+    store.setStatus(site.id, 'ready');
+    const afterTurnCalls: string[] = [];
+    const manager = new AgentManager(store, scriptedRunner(), {
+      cloneDir: (slug) => `/clones/${slug}`,
+      ensureBranch: async () => undefined,
+      afterTurn: async (slug) => { afterTurnCalls.push(slug); },
+    });
+    const siteRecord = store.siteFor(user.id, site.id)!;
+    const seen: AgentWireEvent[] = [];
+    manager.subscribe(site.id, (e) => seen.push(e));
+    await manager.send(siteRecord, 'first');
+    await until(() => seen.some((e) => e.type === 'turn_end'));
+    expect(afterTurnCalls).toEqual(['klant-nl']);
+    await manager.shutdown();
+  });
+
+  it('logs and swallows an afterTurn failure instead of surfacing it', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = new Store(':memory:');
+    const user = store.createUser('a@example.com', 'h')!;
+    const site = store.createSite(user.id, 'S', 'https://klant.nl', 'klant-nl')!;
+    store.setStatus(site.id, 'ready');
+    const manager = new AgentManager(store, scriptedRunner(), {
+      cloneDir: (slug) => `/clones/${slug}`,
+      ensureBranch: async () => undefined,
+      afterTurn: async () => { throw new Error('deploy failed'); },
+    });
+    const siteRecord = store.siteFor(user.id, site.id)!;
+    const seen: AgentWireEvent[] = [];
+    manager.subscribe(site.id, (e) => seen.push(e));
+    await manager.send(siteRecord, 'first');
+    await until(() => seen.some((e) => e.type === 'turn_end'));
+    await until(() => consoleErrorSpy.mock.calls.some((c) => c[0] === 'afterTurn failed:'));
+    expect(store.currentAgentSession(site.id)!.status).toBe('idle'); // turn_end handling unaffected
+    consoleErrorSpy.mockRestore();
+    await manager.shutdown();
+  });
 });
