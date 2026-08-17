@@ -85,7 +85,10 @@ export function SitePage() {
 
   useEffect(() => {
     const es = new EventSource(`/api/sites/${id}/sync/events`);
-    es.onmessage = (ev) => setSync(JSON.parse(ev.data) as SyncState);
+    es.onmessage = (ev) => {
+      setSync(JSON.parse(ev.data) as SyncState);
+      es.close();
+    };
     return () => es.close();
   }, [id]);
 
