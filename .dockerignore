@@ -1,0 +1,10 @@
+.git
+.env
+**/node_modules
+**/.DS_Store
+ferry-cli/dist
+ferry-dashboard/dist
+ferry-plugin/vendor
+ferry-plugin/tests
+docs
+.fly
