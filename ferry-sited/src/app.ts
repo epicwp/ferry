@@ -1,4 +1,7 @@
+import * as fsp from 'node:fs/promises';
+import { Readable } from 'node:stream';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { x as tarExtract } from 'tar';
 import { makeVerify } from './verify.js';
 export { sitedCanonical } from './verify.js';
 
@@ -21,6 +24,29 @@ function parseShowColumns(stdout: string): { fields: string[]; pkCols: string[] 
     if (key === 'PRI') pkCols.push(field);
   }
   return { fields, pkCols };
+}
+
+/** Extracts a gzipped tar `buffer` into `dest`, rejecting (throwing on) any entry
+ *  whose path is absolute or contains a `..` segment. */
+async function extractTar(buffer: Buffer, dest: string): Promise<void> {
+  const stream = tarExtract({
+    cwd: dest,
+    filter: (entryPath) => {
+      if (entryPath.startsWith('/') || entryPath.split('/').includes('..')) {
+        throw new Error(`unsafe tar entry: ${entryPath}`);
+      }
+      return true;
+    },
+  });
+  const done = new Promise<void>((resolve, reject) => {
+    stream.on('error', reject);
+    stream.on('close', resolve);
+  });
+  for await (const chunk of Readable.from(buffer)) {
+    stream.write(chunk as Buffer);
+  }
+  stream.end();
+  await done;
 }
 
 export function buildSited(deps: SitedDeps): FastifyInstance {
@@ -48,6 +74,38 @@ export function buildSited(deps: SitedDeps): FastifyInstance {
       return parseShowColumns(stdout);
     }
     return reply.code(400).send({ error: 'unknown kind' });
+  });
+
+  app.post('/wp', { preHandler: verify }, async (request) => {
+    const body = JSON.parse((request.body as Buffer).toString('utf8') || '{}') as { argv?: string[] };
+    const argv = Array.isArray(body.argv) ? body.argv.map(String) : [];
+    return deps.exec('wp', [`--path=${deps.docroot}`, '--allow-root', ...argv], { timeoutMs: 120_000 });
+  });
+
+  app.post('/db/import', { preHandler: verify }, async (request, reply) => {
+    const sql = request.body as Buffer;
+    const { exitCode, stderr } = await deps.exec('mysql', ['db'], { input: sql, timeoutMs: 600_000 });
+    if (exitCode !== 0) return reply.code(500).send({ error: stderr.slice(0, 500) });
+    return reply.code(204).send();
+  });
+
+  app.put('/files', { preHandler: verify }, async (request, reply) => {
+    const tarball = request.body as Buffer;
+    const next = `${deps.docroot}.new`;
+    const old = `${deps.docroot}.old`;
+    await fsp.rm(next, { recursive: true, force: true });
+    await fsp.mkdir(next, { recursive: true });
+    try {
+      await extractTar(tarball, next);
+    } catch (err) {
+      await fsp.rm(next, { recursive: true, force: true });
+      return reply.code(400).send({ error: err instanceof Error ? err.message : 'bad archive' });
+    }
+    await fsp.rm(old, { recursive: true, force: true });
+    await fsp.rename(deps.docroot, old).catch(() => {}); // first deploy: docroot may not exist yet
+    await fsp.rename(next, deps.docroot);
+    await fsp.rm(old, { recursive: true, force: true });
+    return reply.code(204).send();
   });
 
   return app;
