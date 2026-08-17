@@ -103,8 +103,8 @@ export async function pull(slug: string, deps: PullDeps = {}, opts: PullOpts = {
   const postProvision = loadProfile(slug);
   if (postProvision.flySited?.parityNote) progress({ phase: 'import', detail: postProvision.flySited.parityNote });
   await env.importDb(docroot, dump);
-  profile.binlog = await env.binlogPosition(docroot);      // journal window starts here (Task 10)
-  saveProfile(profile);
+  postProvision.binlog = await env.binlogPosition(docroot); // journal window starts here (Task 10)
+  saveProfile(postProvision);                              // persist the reloaded profile, not the stale pre-provision one - keeps flySited (written by env.provision) intact
   const admin = await env.createAdmin(docroot);
   progress({ phase: 'done' });
   return {

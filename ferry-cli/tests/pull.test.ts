@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CloneEnv, TableColumns } from '../src/env/ddev.js';
-import { saveProfile, type SiteInfo } from '../src/profile.js';
+import { loadProfile, saveProfile, type SiteInfo } from '../src/profile.js';
 import { pull } from '../src/pull.js';
 import { hashOf, startMockPlugin, sizeOf, type MockPlugin } from './helpers/mockPlugin.js';
 import { startMockWporg, zipOf, type MockWporg } from './helpers/mockWporg.js';
@@ -15,8 +15,13 @@ const DEAD_WPORG = { api: 'http://127.0.0.1:1', downloads: 'http://127.0.0.1:1' 
 class FakeEnv implements CloneEnv {
   calls: string[] = [];
   wpConfigPresentAtImport = false;
-  async provision(): Promise<void> {
+  async provision(clonePath: string, info: SiteInfo, name: string): Promise<void> {
     this.calls.push('provision');
+    // Mirrors FlyEnv.provision: loads the profile, writes substrate state, saves it back -
+    // a regression guard for pull() clobbering this with a stale pre-provision profile object.
+    const profile = loadProfile(name);
+    profile.flySited = { app: 'a', machineId: 'm', volumeId: 'v', secret: 's' };
+    saveProfile(profile);
   }
   async importDb(clonePath: string): Promise<void> {
     this.calls.push('importDb');
@@ -121,6 +126,8 @@ describe('pull', () => {
     const profile = JSON.parse(readFileSync(join(home, 'sites/fixture/profile.json'), 'utf8'));
     expect(profile.info.wp).toBe('6.5');
     expect(profile.binlog).toEqual({ file: 'ferry-bin.000001', position: 328 });
+    // Regression: the post-provision profile save must not clobber substrate state provision() wrote.
+    expect(profile.flySited).toEqual({ app: 'a', machineId: 'm', volumeId: 'v', secret: 's' });
 
     const git = (...args: string[]) => execFileSync('git', args, { cwd: clonePath, encoding: 'utf8' }).trim();
     expect(result.commit).toMatch(/^[0-9a-f]{40}$/);
