@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildSited, type SitedDeps } from '../src/app.js';
 import { SECRET, signedHeaders } from './helpers.js';
 
-const okExec: SitedDeps['exec'] = async () => ({ stdout: '', stderr: '', exitCode: 0 });
+const okExec: SitedDeps['exec'] = async () => ({ stdout: 'File\tPosition\nferry-bin.000001\t4\n', stderr: '', exitCode: 0 });
 
 describe('sited transport', () => {
   it('health is open and empty', async () => {

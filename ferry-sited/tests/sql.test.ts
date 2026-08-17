@@ -14,6 +14,14 @@ describe('POST /sql', () => {
     expect(res.json()).toEqual({ file: 'ferry-bin.000002', position: 1234 });
   });
 
+  it('binlog-status returns 500 on empty/malformed output', async () => {
+    const exec: SitedDeps['exec'] = async () => ({ stdout: '', stderr: '', exitCode: 0 });
+    const app = buildSited({ secret: SECRET, docroot: '/tmp', exec });
+    const res = await inject(app, 'POST', '/sql', { kind: 'binlog-status' });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: 'unexpected SHOW BINLOG STATUS output' });
+  });
+
   it('show-columns validates the table name and parses columns', async () => {
     const exec: SitedDeps['exec'] = async (_c, args) => {
       expect(args[2]).toBe('SHOW COLUMNS FROM wp_options');

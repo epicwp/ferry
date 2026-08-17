@@ -38,7 +38,8 @@ export function buildSited(deps: SitedDeps): FastifyInstance {
       const { stdout, exitCode, stderr } = await deps.exec('mysql', ['db', '-e', 'SHOW BINLOG STATUS']);
       if (exitCode !== 0) return reply.code(500).send({ error: stderr.slice(0, 500) });
       const row = stdout.trim().split('\n')[1]?.split('\t');
-      return { file: row?.[0], position: Number(row?.[1]) };
+      if (!row || row.length < 2 || row[0] === '' || !Number.isFinite(Number(row[1]))) return reply.code(500).send({ error: 'unexpected SHOW BINLOG STATUS output' });
+      return { file: row[0], position: Number(row[1]) };
     }
     if (body.kind === 'show-columns') {
       if (!body.table || !TABLE_RE.test(body.table)) return reply.code(400).send({ error: 'invalid table' });
