@@ -67,7 +67,7 @@ export function SitesPage() {
           <div className="empty__inner">
             <div className="empty__placeholder"><span className="mono">no connected sites</span></div>
             <h2>Connect your first WordPress site</h2>
-            <p>Ferry safely clones your production site into an isolated DDEV environment. No SSH, no FTP — one plugin and a pairing code.</p>
+            <p>Ferry safely clones your production site into an isolated clone environment. No SSH, no FTP — one plugin and a pairing code.</p>
             <button className="btn btn--primary" onClick={() => navigate('/sites/new')}>+ New site</button>
           </div>
         </div>

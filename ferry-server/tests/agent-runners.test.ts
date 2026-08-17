@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { scriptedRunner } from '../src/agent/scripted-runner.js';
-import { buildFerryTools } from '../src/agent/sdk-runner.js';
+import { auditedEnv, buildFerryTools } from '../src/agent/sdk-runner.js';
 import type { RunnerEvent } from '../src/agent/types.js';
 
 async function drain(events: RunnerEvent[], until: RunnerEvent['type'], timeoutMs = 1000): Promise<void> {
@@ -166,5 +166,47 @@ describe('buildFerryTools handlers', () => {
     for (const p of invented) {
       expect(schema.safeParse({ ...base, preconditions: [p] }).success).toBe(false);
     }
+  });
+
+  it('omits the wp tool when deps.runWp is not set', () => {
+    const tools = buildFerryTools('klant-nl', {
+      fetchUploads: async () => ({}),
+      loadProfile: () => ({ url: 'https://klant.nl' }),
+      ...noopDeps,
+    });
+    expect((tools as { name: string }[]).map((t) => t.name)).toEqual([
+      'fetch_uploads', 'site_info', 'db_journal', 'create_change',
+    ]);
+  });
+
+  it('adds a fifth wp tool that forwards argv when deps.runWp is set', async () => {
+    const calls: unknown[] = [];
+    const tools = buildFerryTools('klant-nl', {
+      fetchUploads: async () => ({}),
+      loadProfile: () => ({ url: 'https://klant.nl' }),
+      ...noopDeps,
+      runWp: async (slug, argv) => { calls.push([slug, argv]); return { stdout: 'ok', stderr: '', exitCode: 0 }; },
+    });
+    expect((tools as { name: string }[]).map((t) => t.name)).toEqual([
+      'fetch_uploads', 'site_info', 'db_journal', 'create_change', 'wp',
+    ]);
+    const wpTool = (tools as { name: string; handler: (a: unknown) => Promise<{ content: { type: string; text: string }[] }> }[])
+      .find((t) => t.name === 'wp')!;
+    const result = await wpTool.handler({ argv: ['plugin', 'list'] });
+    expect(calls).toEqual([['klant-nl', ['plugin', 'list']]]);
+    expect(JSON.parse(result.content[0]!.text)).toEqual({ stdout: 'ok', stderr: '', exitCode: 0 });
+  });
+});
+
+describe('auditedEnv', () => {
+  it('keeps DOCKER_HOST for ddev', () => {
+    const env = auditedEnv('/config', 'ddev', { DOCKER_HOST: 'unix:///var/run/docker.sock', PATH: '/usr/bin' } as NodeJS.ProcessEnv);
+    expect(env.DOCKER_HOST).toBe('unix:///var/run/docker.sock');
+  });
+
+  it('drops DOCKER_HOST for fly even when process.env has it', () => {
+    const env = auditedEnv('/config', 'fly', { DOCKER_HOST: 'unix:///var/run/docker.sock', PATH: '/usr/bin' } as NodeJS.ProcessEnv);
+    expect(env.DOCKER_HOST).toBeUndefined();
+    expect(env.PATH).toBe('/usr/bin'); // other allowlisted vars still pass through
   });
 });

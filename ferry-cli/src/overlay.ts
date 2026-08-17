@@ -159,10 +159,11 @@ export function neutralizeDropIns(docroot: string): string[] {
   return renamed;
 }
 
-/** Phase 2 (after file transfer): work on files that arrive with the pull. */
-export async function finalizeClone(docroot: string, info: SiteInfo): Promise<string[]> {
+/** Phase 2 (after file transfer): work on files that arrive with the pull.
+ *  `forceApache` covers substrates that always serve Apache regardless of production's server (§2.5). */
+export async function finalizeClone(docroot: string, info: SiteInfo, forceApache = false): Promise<string[]> {
   const renamed = neutralizeDropIns(docroot);
-  if (info.server === 'apache') {
+  if (forceApache || info.server === 'apache') {
     const htaccessPath = join(docroot, '.htaccess');
     const existing = existsSync(htaccessPath) ? await fsp.readFile(htaccessPath, 'utf8') : '';
     if (!existing.includes('# BEGIN ferry-uploads-fallback')) {

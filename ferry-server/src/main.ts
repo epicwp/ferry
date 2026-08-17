@@ -1,13 +1,16 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { cloneEnv } from '../../ferry-cli/src/env/index.js';
+import type { FlyEnv } from '../../ferry-cli/src/env/fly.js';
+import { journalCandidates as realJournalCandidates } from '../../ferry-cli/src/journal.js';
 import { ferryHome, loadProfile } from '../../ferry-cli/src/profile.js';
 import { buildApp } from './app.js';
 import { ensureAgentBranch } from './agent/branch.js';
 import type { AgentManager } from './agent/manager.js';
-import { sdkRunner } from './agent/sdk-runner.js';
+import { sdkRunner, type SdkRunnerDeps } from './agent/sdk-runner.js';
 import { ChangeService, type CreateChangeInput } from './changes.js';
-import { accountCap, listenHost, secureCookies } from './env-config.js';
+import { accountCap, cloneEnvKind, listenHost, secureCookies } from './env-config.js';
 import { applyEnvFile } from './env-file.js';
 import { realEngine, realPushRunner } from './engine.js';
 import { Lifecycle } from './lifecycle.js';
@@ -28,6 +31,8 @@ const purgeTimer = setInterval(() => store.purgeExpiredSessions(), 60 * 60_000);
 purgeTimer.unref(); // must not keep the process alive on its own
 
 const cloneDir = (slug: string) => join(ferryHome(), 'clones', slug);
+const envKind = cloneEnvKind(process.env);
+const substrate = cloneEnv(envKind);
 
 // create_change needs the live AgentManager for appendSystemEvent's SSE fan-out, but
 // AgentManager isn't constructed until buildApp() runs (from the runner built below) —
@@ -47,8 +52,10 @@ const agentDepsForMain = process.env.ANTHROPIC_API_KEY
           maxTurns: Number(process.env.FERRY_AGENT_MAX_TURNS ?? 50),
           maxBudgetUsd: Number(process.env.FERRY_AGENT_MAX_BUDGET_USD ?? 5),
           configDir: join(ferryHome(), 'agent'),
+          envKind,
         },
         {
+          journalCandidates: (slug) => realJournalCandidates(slug, substrate),
           createChange: (slug, input) => {
             const site = store.siteBySlug(slug);
             if (!site) throw new Error(`create_change: unknown site "${slug}".`);
@@ -56,12 +63,18 @@ const agentDepsForMain = process.env.ANTHROPIC_API_KEY
             // ChangeService.create() re-validates their runtime shape before trusting them.
             return changeService.create(site, input as unknown as CreateChangeInput);
           },
-        },
+          ...(envKind === 'fly'
+            ? { runWp: (slug: string, argv: string[]) => (substrate as FlyEnv).runWp(cloneDir(slug), argv) }
+            : {}),
+        } satisfies Partial<SdkRunnerDeps>,
       ),
       cloneDir,
       ensureBranch: ensureAgentBranch,
       idleMs: Number(process.env.FERRY_AGENT_IDLE_MS ?? 30 * 60_000),
       onManagerReady: (m: AgentManager) => { agentManager = m; },
+      ...(envKind === 'fly'
+        ? { afterTurn: (slug: string) => substrate.deployFiles(cloneDir(slug)) }
+        : {}),
     }
   : undefined;
 if (!agentDepsForMain) {
@@ -73,7 +86,7 @@ const distDir = fileURLToPath(new URL('../../ferry-dashboard/dist', import.meta.
 const lifecycle = new Lifecycle();
 const app = buildApp({
   store,
-  engine: realEngine(),
+  engine: realEngine({ env: substrate }),
   pluginZip: buildPluginZip(pluginDir),
   staticDir: existsSync(distDir) ? distDir : undefined,
   agent: agentDepsForMain,

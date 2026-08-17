@@ -39,7 +39,7 @@ export interface PullResult {
 
 /** The §4.6 flow. DDEV provisioning starts early and is awaited late ("join"). */
 export async function pull(slug: string, deps: PullDeps = {}, opts: PullOpts = {}): Promise<PullResult> {
-  const env = deps.env ?? new DdevEnv();
+  const env: CloneEnv = deps.env ?? new DdevEnv();
   const profile = loadProfile(slug);
   const client = new FerryClient(profile.url, profile.secret);
   await client.syncClock();
@@ -82,7 +82,7 @@ export async function pull(slug: string, deps: PullDeps = {}, opts: PullOpts = {
     const retry = rec.failed.map((f) => byPath.get(f.path)).filter((e): e is ManifestEntry => e !== undefined);
     skipped.push(...(await fetchAll(client, retry, docroot)).skipped);
   }
-  await finalizeClone(docroot, info);                     // phase 2: drop-ins arrived with the pull
+  await finalizeClone(docroot, info, env.cloneWebserver === 'apache'); // phase 2: drop-ins arrived with the pull
 
   // Git substrate: neutralize nested repos BEFORE init so git never treats one as a submodule,
   // then commit the WP-root tree as a `production` snapshot (DB stays outside git).
@@ -99,9 +99,12 @@ export async function pull(slug: string, deps: PullDeps = {}, opts: PullOpts = {
   progress({ phase: 'import' });
 
   await envReady;                                         // join (§4.6)
+  await env.deployFiles(docroot);                         // remote substrates serve a shipped copy; local: no-op
+  const postProvision = loadProfile(slug);
+  if (postProvision.flySited?.parityNote) progress({ phase: 'import', detail: postProvision.flySited.parityNote });
   await env.importDb(docroot, dump);
-  profile.binlog = await env.binlogPosition(docroot);      // journal window starts here (Task 10)
-  saveProfile(profile);
+  postProvision.binlog = await env.binlogPosition(docroot); // journal window starts here (Task 10)
+  saveProfile(postProvision);                              // persist the reloaded profile, not the stale pre-provision one - keeps flySited (written by env.provision) intact
   const admin = await env.createAdmin(docroot);
   progress({ phase: 'done' });
   return {

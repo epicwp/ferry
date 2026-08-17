@@ -118,6 +118,7 @@ test('3b gate: sign up → add site → pair → watch progress → ready in the
   // done: verified clone, URL as copyable text — never a link (§1 decision)
   await expect(page.getByText('Clone verified ✓')).toBeVisible({ timeout: 150_000 });
   expect(await page.locator('a[href*="ddev.site"]').count()).toBe(0);
+  expect(await page.locator('a[href*="fly.dev"]').count()).toBe(0);
   expect(page.url()).not.toContain('admin');
 
   await page.getByRole('button', { name: 'Back to sites' }).click();
@@ -131,6 +132,7 @@ test('3b gate: sign up → add site → pair → watch progress → ready in the
   await expect(page.locator('.chat__title')).toHaveText('Agent chat');
   await expect(page.getByText('SSE live')).toBeVisible();
   expect(await page.locator('a[href*="ddev.site"]').count()).toBe(0); // binding constraint: no clone link, ever (§1 decision)
+  expect(await page.locator('a[href*="fly.dev"]').count()).toBe(0);
 
   const composer = page.getByPlaceholder('Ask a follow-up or request another fix…');
   await composer.fill('Why is VAT wrong on orders above €100?');

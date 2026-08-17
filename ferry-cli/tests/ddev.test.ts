@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BINLOG_CNF, ddevConfig, majorMinor } from '../src/env/ddev.js';
+import { BINLOG_CNF, ddevConfig, majorMinor, parseShowColumns } from '../src/env/ddev.js';
 import type { SiteInfo } from '../src/profile.js';
 
 const info = (over: Partial<SiteInfo> = {}): SiteInfo => ({
@@ -50,5 +50,14 @@ describe('BINLOG_CNF', () => {
       'expire-logs-days=14',
       '',
     ].join('\n'));
+  });
+});
+
+describe('parseShowColumns', () => {
+  it('reads fields and composite PKs from tab-separated SHOW COLUMNS output', () => {
+    const out = 'Field\tType\tNull\tKey\tDefault\tExtra\n' +
+      'option_id\tbigint\tNO\tPRI\t\tauto_increment\n' +
+      'option_name\tvarchar(191)\tNO\tUNI\t\t\n';
+    expect(parseShowColumns(out)).toEqual({ fields: ['option_id', 'option_name'], pkCols: ['option_id'] });
   });
 });

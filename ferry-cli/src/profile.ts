@@ -24,6 +24,8 @@ export interface SiteProfile {
   clonePath: string;
   info?: SiteInfo;
   binlog?: { file: string; position: number };
+  /** Fly-substrate state written by FlyEnv.provision(); absent for local DDEV clones. */
+  flySited?: { app: string; machineId: string; volumeId: string; secret: string; parityNote?: string };
 }
 
 // All state lives in readable files per site (SaaS spec §13) - the SaaS

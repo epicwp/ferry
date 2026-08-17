@@ -53,6 +53,7 @@ test('the changes tab lists changes with status pills, filters and a draft badge
   await expect(page.locator('.sidebar__badge')).toHaveText('1');
   // standing constraint: no clickable clone URL anywhere
   expect(await page.locator('a[href*="ddev.site"]').count()).toBe(0);
+  expect(await page.locator('a[href*="fly.dev"]').count()).toBe(0);
 });
 
 test('an empty changes tab shows the empty state', async ({ page }) => {
@@ -90,6 +91,7 @@ test('a draft change page shows the full card and can be discarded', async ({ pa
   await page.getByRole('button', { name: 'Discard' }).click();
   await expect(page).toHaveURL(`/sites/${siteId}/changes`);
   expect(await page.locator('a[href*="ddev.site"]').count()).toBe(0);
+  expect(await page.locator('a[href*="fly.dev"]').count()).toBe(0);
 });
 
 test('the drift preview reports a drifted production honestly', async ({ page }) => {

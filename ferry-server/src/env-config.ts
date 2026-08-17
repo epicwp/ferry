@@ -19,3 +19,12 @@ export function accountCap(env: NodeJS.ProcessEnv): number | undefined {
   }
   return n;
 }
+
+export type CloneEnvKind = 'ddev' | 'fly';
+
+export function cloneEnvKind(env: NodeJS.ProcessEnv): CloneEnvKind {
+  const raw = env.FERRY_CLONE_ENV;
+  if (raw === undefined || raw === '' || raw === 'ddev') return 'ddev';
+  if (raw === 'fly') return 'fly';
+  throw new Error(`FERRY_CLONE_ENV must be "ddev" or "fly", got "${raw}"`);
+}

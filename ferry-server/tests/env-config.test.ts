@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountCap, listenHost, secureCookies } from '../src/env-config.js';
+import { accountCap, cloneEnvKind, listenHost, secureCookies } from '../src/env-config.js';
 
 describe('listenHost', () => {
   it('defaults to loopback', () => {
@@ -35,5 +35,19 @@ describe('accountCap', () => {
     expect(() => accountCap({ FERRY_MAX_ACCOUNTS: 'two' })).toThrow(/FERRY_MAX_ACCOUNTS/);
     expect(() => accountCap({ FERRY_MAX_ACCOUNTS: '-1' })).toThrow(/FERRY_MAX_ACCOUNTS/);
     expect(() => accountCap({ FERRY_MAX_ACCOUNTS: '2.5' })).toThrow(/FERRY_MAX_ACCOUNTS/);
+  });
+});
+
+describe('cloneEnvKind', () => {
+  it("defaults to ddev for unset/empty/'ddev'", () => {
+    expect(cloneEnvKind({})).toBe('ddev');
+    expect(cloneEnvKind({ FERRY_CLONE_ENV: '' })).toBe('ddev');
+    expect(cloneEnvKind({ FERRY_CLONE_ENV: 'ddev' })).toBe('ddev');
+  });
+  it("accepts 'fly'", () => {
+    expect(cloneEnvKind({ FERRY_CLONE_ENV: 'fly' })).toBe('fly');
+  });
+  it('throws on anything else', () => {
+    expect(() => cloneEnvKind({ FERRY_CLONE_ENV: 'docker' })).toThrow(/FERRY_CLONE_ENV/);
   });
 });

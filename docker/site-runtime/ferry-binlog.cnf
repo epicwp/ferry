@@ -1,0 +1,8 @@
+[mysqld]
+datadir = /data/mysql
+log-bin = ferry-bin
+binlog-format = ROW
+binlog-row-image = FULL
+server-id = 1
+expire-logs-days = 14
+bind-address = 127.0.0.1

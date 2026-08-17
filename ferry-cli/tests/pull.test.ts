@@ -4,8 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { CloneEnv } from '../src/env/ddev.js';
-import { saveProfile, type SiteInfo } from '../src/profile.js';
+import type { CloneEnv, TableColumns } from '../src/env/ddev.js';
+import { loadProfile, saveProfile, type SiteInfo } from '../src/profile.js';
 import { pull } from '../src/pull.js';
 import { hashOf, startMockPlugin, sizeOf, type MockPlugin } from './helpers/mockPlugin.js';
 import { startMockWporg, zipOf, type MockWporg } from './helpers/mockWporg.js';
@@ -15,8 +15,14 @@ const DEAD_WPORG = { api: 'http://127.0.0.1:1', downloads: 'http://127.0.0.1:1' 
 class FakeEnv implements CloneEnv {
   calls: string[] = [];
   wpConfigPresentAtImport = false;
-  async provision(): Promise<void> {
+  constructor(readonly cloneWebserver?: 'apache') {}
+  async provision(clonePath: string, info: SiteInfo, name: string): Promise<void> {
     this.calls.push('provision');
+    // Mirrors FlyEnv.provision: loads the profile, writes substrate state, saves it back -
+    // a regression guard for pull() clobbering this with a stale pre-provision profile object.
+    const profile = loadProfile(name);
+    profile.flySited = { app: 'a', machineId: 'm', volumeId: 'v', secret: 's' };
+    saveProfile(profile);
   }
   async importDb(clonePath: string): Promise<void> {
     this.calls.push('importDb');
@@ -36,6 +42,9 @@ class FakeEnv implements CloneEnv {
   async extractBinlog(): Promise<string> {
     return '';
   }
+  async showColumns(): Promise<TableColumns> { return { fields: [], pkCols: [] }; }
+  async deployFiles(): Promise<void> { this.calls.push('deployFiles'); }
+  async destroy(): Promise<void> {}
 }
 
 const siteInfo = (over: Partial<SiteInfo> = {}): SiteInfo => ({
@@ -108,7 +117,7 @@ describe('pull', () => {
     expect(result.provenance.reused).toBe(0);
     expect(result.provenance.reconstructed).toBe(0);
     expect(existsSync(join(home, 'sites/fixture/provenance.json'))).toBe(true);
-    expect(env.calls).toEqual(['provision', 'importDb', 'binlogPosition', 'createAdmin']);
+    expect(env.calls).toEqual(['provision', 'deployFiles', 'importDb', 'binlogPosition', 'createAdmin']);
     expect(env.wpConfigPresentAtImport).toBe(true);
     expect(readFileSync(join(clonePath, 'index.php'), 'utf8')).toBe('<?php // wp');
     expect(existsSync(join(clonePath, 'wp-content/object-cache.php.ferry-disabled'))).toBe(true);
@@ -118,6 +127,8 @@ describe('pull', () => {
     const profile = JSON.parse(readFileSync(join(home, 'sites/fixture/profile.json'), 'utf8'));
     expect(profile.info.wp).toBe('6.5');
     expect(profile.binlog).toEqual({ file: 'ferry-bin.000001', position: 328 });
+    // Regression: the post-provision profile save must not clobber substrate state provision() wrote.
+    expect(profile.flySited).toEqual({ app: 'a', machineId: 'm', volumeId: 'v', secret: 's' });
 
     const git = (...args: string[]) => execFileSync('git', args, { cwd: clonePath, encoding: 'utf8' }).trim();
     expect(result.commit).toMatch(/^[0-9a-f]{40}$/);
@@ -138,6 +149,31 @@ describe('pull', () => {
     expect(ignored('wp-config.php')).toBe(true);
     expect(ignored('wp-content/mu-plugins/ferry-overlay.php')).toBe(true);
     expect(ignored('CLAUDE.md')).toBe(true);
+  });
+
+  it('writes the uploads .htaccess fallback exactly when the env forces Apache, regardless of production server', async () => {
+    const manifest = [
+      'index.php',
+      'wp-load.php',
+      'wp-content/object-cache.php',
+      'wp-content/plugins/foo/.git/HEAD',
+      'wp-content/plugins/foo/plugin.php',
+    ].map((p) => ({ path: p, size: sizeOf(fixture, p), hash: null }));
+    mock = await startMockPlugin(fixture, {
+      info: siteInfo(), // server: 'nginx'
+      manifest,
+      dbTables: [{
+        name: 'wp_options', rows: 1, bytes: 10, pk: 'option_id', maxpk: 1,
+        batches: [{ sql: 'INSERT INTO `wp_options` VALUES (1);\n', lastKey: 1, complete: true }],
+      }],
+    });
+    pair(mock.base);
+
+    await pull('fixture', { env: new FakeEnv(), wporg: DEAD_WPORG });
+    expect(existsSync(join(clonePath, '.htaccess'))).toBe(false);
+
+    await pull('fixture', { env: new FakeEnv('apache'), wporg: DEAD_WPORG });
+    expect(existsSync(join(clonePath, '.htaccess'))).toBe(true);
   });
 
   it('refuses multisite before transferring anything', async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { makeApp, signup, stubEngine } from './helpers/testApp.js';
+import { scriptedRunner } from '../src/agent/scripted-runner.js';
+import { agentDeps, makeApp, signup, stubEngine } from './helpers/testApp.js';
 
 describe('site routes', () => {
   it('creates a site with derived slug and lists it', async () => {
@@ -62,5 +63,71 @@ describe('site routes', () => {
     expect(limited.json()).toEqual({ error: 'Too many pairing attempts. Try again later.' });
     expect(limited.headers['retry-after']).toBeDefined();
     expect(linkCalls).toBe(5);
+  });
+
+  it('deletes a ready site: destroyClone runs with the slug, then the row is gone', async () => {
+    const destroyed: string[] = [];
+    const engine = stubEngine({
+      destroyClone: (slug) => { destroyed.push(slug); return Promise.resolve(); },
+    });
+    const { app, store } = makeApp({ engine });
+    const cookie = await signup(app);
+    const created = await app.inject({
+      method: 'POST', url: '/api/sites', headers: { cookie },
+      payload: { name: 'S', url: 'https://example.com' },
+    });
+    const siteId = created.json().id as number;
+    const slug = created.json().slug as string;
+    store.setStatus(siteId, 'ready');
+
+    const res = await app.inject({ method: 'DELETE', url: `/api/sites/${siteId}`, headers: { cookie } });
+    expect(res.statusCode).toBe(204);
+    expect(destroyed).toEqual([slug]);
+
+    const check = await app.inject({ method: 'GET', url: `/api/sites/${siteId}`, headers: { cookie } });
+    expect(check.statusCode).toBe(404);
+  });
+
+  it('keeps the site row and returns 502 when destroyClone throws', async () => {
+    const engine = stubEngine({ destroyClone: () => Promise.reject(new Error('fly api boom')) });
+    const { app, store } = makeApp({ engine });
+    const cookie = await signup(app);
+    const created = await app.inject({
+      method: 'POST', url: '/api/sites', headers: { cookie },
+      payload: { name: 'S', url: 'https://example.com' },
+    });
+    const siteId = created.json().id as number;
+    store.setStatus(siteId, 'ready');
+
+    const res = await app.inject({ method: 'DELETE', url: `/api/sites/${siteId}`, headers: { cookie } });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'Clone teardown failed — try again.' });
+
+    const check = await app.inject({ method: 'GET', url: `/api/sites/${siteId}`, headers: { cookie } });
+    expect(check.statusCode).toBe(200);
+  });
+
+  it('refuses to delete while the agent is active, and does not call destroyClone', async () => {
+    let destroyCalls = 0;
+    const engine = stubEngine({ destroyClone: () => { destroyCalls++; return Promise.resolve(); } });
+    const { app, store } = makeApp({ engine, agent: agentDeps(scriptedRunner()) });
+    const cookie = await signup(app);
+    const created = await app.inject({
+      method: 'POST', url: '/api/sites', headers: { cookie },
+      payload: { name: 'S', url: 'https://example.com' },
+    });
+    const siteId = created.json().id as number;
+    store.setStatus(siteId, 'ready');
+    await app.inject({
+      method: 'POST', url: `/api/sites/${siteId}/agent/messages`, headers: { cookie }, payload: { text: 'hi' },
+    });
+
+    const res = await app.inject({ method: 'DELETE', url: `/api/sites/${siteId}`, headers: { cookie } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'Site is busy — wait for the current sync, agent turn, or push to finish.' });
+    expect(destroyCalls).toBe(0);
+
+    const check = await app.inject({ method: 'GET', url: `/api/sites/${siteId}`, headers: { cookie } });
+    expect(check.statusCode).toBe(200);
   });
 });

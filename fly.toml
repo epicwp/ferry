@@ -8,6 +8,10 @@ kill_timeout = "20s"   # > the 15s shutdown hard deadline (ferry-server/src/shut
   FERRY_HOST = "0.0.0.0"
   FERRY_SECURE_COOKIES = "1"
   FERRY_MAX_ACCOUNTS = "2"
+  FERRY_CLONE_ENV = "fly"
+  FERRY_FLY_ORG = "personal"
+  FERRY_FLY_REGION = "ams"
+  FERRY_SITE_RUNTIME_IMAGE = "ghcr.io/epicwp/ferry-site-runtime"
 
 [[vm]]
   size = "shared-cpu-1x"

@@ -1,13 +1,9 @@
-import { execFile } from 'node:child_process';
 import { promises as fsp } from 'node:fs';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
-import type { CloneEnv } from './env/ddev.js';
+import type { CloneEnv, TableColumns } from './env/ddev.js';
 import { loadProfile } from './profile.js';
 import type { DbOp, RiskClass } from './push-types.js';
 import { isRefusedBareTable, stripTablePrefix } from './refusals.js';
-
-const run = promisify(execFile);
 
 export interface RawRowEvent {
   table: string;
@@ -16,12 +12,6 @@ export interface RawRowEvent {
   pkCols: string[];
   before?: Record<string, string | null>;
   after?: Record<string, string | null>;
-}
-
-/** Per-table column info resolved from `SHOW COLUMNS FROM <table>` (ordinal order + PRI flags). */
-export interface TableColumns {
-  fields: string[];
-  pkCols: string[];
 }
 
 const HEADER_RE = /^### (UPDATE|INSERT INTO|DELETE FROM) `[^`]+`\.`([^`]+)`\s*$/;
@@ -173,20 +163,6 @@ export function classify(
   return { op: rowOp, risk: 'higher' };
 }
 
-/** `SHOW COLUMNS FROM <table>` is `Field\tType\tNull\tKey\tDefault\tExtra` - Key='PRI' marks a
- *  primary-key column (every column of a composite key is marked, not just one). */
-function parseShowColumns(stdout: string): TableColumns {
-  const lines = stdout.trim().split('\n').slice(1).filter((l) => l.length > 0);
-  const fields: string[] = [];
-  const pkCols: string[] = [];
-  for (const line of lines) {
-    const [field, , , key] = line.split('\t');
-    fields.push(field);
-    if (key === 'PRI') pkCols.push(field);
-  }
-  return { fields, pkCols };
-}
-
 /** Table names touched, found by scanning the same `### <KIND>` headers parseBinlog reads. */
 function tablesInRaw(raw: string): string[] {
   const found = new Set<string>();
@@ -213,11 +189,10 @@ export async function journalCandidates(
   const prefix = profile.info?.prefix ?? 'wp_';
   const raw = await env.extractBinlog(docroot, profile.binlog);
 
-  // SHOW COLUMNS is async (shells out), so resolve every touched table's columns before parsing.
+  // SHOW COLUMNS is async (goes through the env), so resolve every touched table's columns before parsing.
   const columnCache = new Map<string, TableColumns>();
   for (const table of tablesInRaw(raw)) {
-    const { stdout } = await run('ddev', ['mysql', '-e', `SHOW COLUMNS FROM ${table}`], { cwd: docroot });
-    columnCache.set(table, parseShowColumns(stdout));
+    columnCache.set(table, await env.showColumns(docroot, table));
   }
   const events = parseBinlog(raw, (table) => columnCache.get(table) ?? { fields: [], pkCols: [] });
 

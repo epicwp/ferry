@@ -11,7 +11,7 @@ import type { ChangeSpec, PushRunner } from './push/types.js';
 import { agentRoutes } from './routes/agent.js';
 import { authRoutes } from './routes/auth.js';
 import { changesRoutes } from './routes/changes.js';
-import { siteRoutes } from './routes/sites.js';
+import { siteDeleteRoute, siteRoutes } from './routes/sites.js';
 import { syncRoutes } from './routes/sync.js';
 import { SyncManager } from './sync.js';
 import type { Change, Store, User } from './store.js';
@@ -29,6 +29,9 @@ export interface AppDeps {
     cloneDir: (slug: string) => string;
     ensureBranch: (cloneDir: string) => Promise<void>;
     idleMs?: number;
+    /** Fly mode: deploy the clone's working tree after each turn (main.ts wires this to
+     *  FlyEnv.deployFiles). Unset on ddev, where the clone's docroot is already live on disk. */
+    afterTurn?: (slug: string) => Promise<void>;
     // Passthroughs for the /changes routes (Task 13) to consume from `deps` directly —
     // main.ts wires the real ones (ChangeService/journalCandidates); tests inject fakes.
     journalCandidates?: (slug: string) => Promise<unknown>;
@@ -128,6 +131,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
           cloneDir: deps.agent.cloneDir,
           ensureBranch: deps.agent.ensureBranch,
           idleMs: deps.agent.idleMs,
+          afterTurn: deps.agent.afterTurn,
         })
       : undefined;
     if (agents) deps.agent?.onManagerReady?.(agents);
@@ -135,6 +139,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (push) lifecycle.pushBusy = () => push.isPushingAny();
     if (push) void push.recover().catch((err) => console.error('push recovery failed:', err));
     syncRoutes(app, deps, sync, agents, push);
+    siteDeleteRoute(app, deps, sync, agents, push);
     if (agents) agentRoutes(app, deps, agents, sync, push);
     if (push) changesRoutes(app, deps, push, sync, agents);
   }

@@ -24,6 +24,7 @@ export function stubEngine(overrides: Partial<Engine> = {}): Engine {
     siteInfo: () => Promise.reject(new Error('not stubbed')),
     verifyClone: () => Promise.reject(new Error('not stubbed')),
     cloneUrl: (slug: string) => `https://${slug}.ddev.site`,
+    destroyClone: () => Promise.reject(new Error('not stubbed')),
     ...overrides,
   };
 }

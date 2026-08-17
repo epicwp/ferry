@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { Agent, interceptors, request } from 'undici';
 import { FerryClient } from '../../ferry-cli/src/client.js';
-import { DdevEnv } from '../../ferry-cli/src/env/ddev.js';
+import { DdevEnv, type CloneEnv } from '../../ferry-cli/src/env/ddev.js';
 import { link } from '../../ferry-cli/src/link.js';
 import { ferryHome, loadProfile, slugFromUrl, type SiteInfo } from '../../ferry-cli/src/profile.js';
 import { pull, type PullOpts, type PullResult } from '../../ferry-cli/src/pull.js';
@@ -24,10 +24,12 @@ export interface Engine {
   siteInfo(slug: string): Promise<SiteInfo>;
   verifyClone(url: string): Promise<VerifyResult>;
   cloneUrl(slug: string): string;
+  destroyClone(slug: string): Promise<void>;
 }
 
 export interface RealEngineOptions {
   verifyFetch?: VerifyFetch;
+  env?: CloneEnv; // clone substrate; defaults to DDEV (local dev)
 }
 
 // Private dispatcher pinned to this module, like wporg.ts's redirectAgent: the
@@ -38,7 +40,7 @@ const verifyAgent = new Agent().compose(interceptors.redirect({ maxRedirections:
 const defaultVerifyFetch: VerifyFetch = (url) => request(url, { dispatcher: verifyAgent });
 
 export function realEngine(opts: RealEngineOptions = {}): Engine {
-  const env = new DdevEnv();
+  const env = opts.env ?? new DdevEnv();
   const verifyFetch = opts.verifyFetch ?? defaultVerifyFetch;
   return {
     async link(url, code) {
@@ -46,7 +48,7 @@ export function realEngine(opts: RealEngineOptions = {}): Engine {
       await link(url, code, join(ferryHome(), 'clones', slugFromUrl(url)));
     },
     async pull(slug, opts) {
-      return pull(slug, {}, opts);
+      return pull(slug, { env }, opts);
     },
     async siteInfo(slug) {
       const profile = loadProfile(slug);
@@ -69,10 +71,10 @@ export function realEngine(opts: RealEngineOptions = {}): Engine {
         } catch (err) {
           last = err instanceof Error ? err.message : String(err);
           if (/certificate|CERT|issuer/i.test(last)) {
-            return {
-              ok: false,
-              detail: `TLS trust failure: ${last}. The server process must start with NODE_EXTRA_CA_CERTS="$(mkcert -CAROOT)/rootCA.pem" — it cannot be set after boot.`,
-            };
+            const hint = url.includes('.ddev.site')
+              ? ' The server process must start with NODE_EXTRA_CA_CERTS="$(mkcert -CAROOT)/rootCA.pem" — it cannot be set after boot.'
+              : '';
+            return { ok: false, detail: `TLS trust failure: ${last}.${hint}` };
           }
         }
         if (Date.now() >= deadline) return { ok: false, detail: `clone did not answer within 30s (last: ${last})` };
@@ -81,6 +83,9 @@ export function realEngine(opts: RealEngineOptions = {}): Engine {
     },
     cloneUrl(slug) {
       return env.url(slug);
+    },
+    async destroyClone(slug) {
+      await env.destroy(slug);
     },
   };
 }

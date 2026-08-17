@@ -1,8 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { MultisiteError } from '../../../ferry-cli/src/link.js';
 import { slugFromUrl } from '../../../ferry-cli/src/profile.js';
+import type { AgentManager } from '../agent/manager.js';
 import { refuseDuringShutdown } from '../lifecycle.js';
+import type { PushManager } from '../push-manager.js';
 import { RateLimiter } from '../rate-limit.js';
+import type { SyncManager } from '../sync.js';
 import type { AppDeps } from '../app.js';
 import type { Site } from '../store.js';
 
@@ -105,5 +108,30 @@ export function siteRoutes(app: FastifyInstance, deps: AppDeps): void {
       }
       return reply.code(502).send({ error: message });
     }
+  });
+}
+
+/** Split from siteRoutes because the concurrency guard needs the sync/agent/push managers,
+ *  which only exist inside app.ts's `if (deps.engine)` block — registered there, next to
+ *  syncRoutes, rather than inside siteRoutes (which runs before those managers are built). */
+export function siteDeleteRoute(app: FastifyInstance, deps: AppDeps, sync: SyncManager, agents?: AgentManager, push?: PushManager): void {
+  const engine = deps.engine;
+  if (!engine) return; // app built without an engine (store-only tests)
+
+  app.delete('/api/sites/:id', { preHandler: app.requireUser }, async (request, reply) => {
+    const site = deps.store.siteFor(request.user.id, Number((request.params as { id: string }).id));
+    if (!site) return reply.code(404).send({ error: 'Site not found.' });
+    if (sync.isRunning(site.id) || agents?.isActive(site.id) || push?.isPushing(site.id)) {
+      return reply.code(409).send({ error: 'Site is busy — wait for the current sync, agent turn, or push to finish.' });
+    }
+    try {
+      await engine.destroyClone(site.slug);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`destroyClone failed for site ${site.slug}: ${message}`);
+      return reply.code(502).send({ error: 'Clone teardown failed — try again.' });
+    }
+    deps.store.deleteSite(request.user.id, site.id);
+    return reply.code(204).send();
   });
 }
