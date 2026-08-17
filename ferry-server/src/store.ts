@@ -277,6 +277,10 @@ export class Store {
     return row ? { id: row.id, email: row.email, passwordHash: row.password_hash } : undefined;
   }
 
+  countUsers(): number {
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n;
+  }
+
   createSession(token: string, userId: number, expiresAt: string): void {
     this.db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)').run(tokenHash(token), userId, expiresAt);
   }

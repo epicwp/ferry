@@ -45,6 +45,8 @@ export interface AppDeps {
   authLimits?: { signupMax?: number };
   /** Spec 2026-08-17 §5: Set-Cookie gains `secure` behind TLS (Fly). Unset = local http dev. */
   secureCookies?: boolean;
+  /** Spec 2026-08-17 §5: hard cap on total accounts (signup → 403 at the cap). Unset = unlimited. */
+  accountCap?: number;
 }
 
 function specFor(change: Change): ChangeSpec {

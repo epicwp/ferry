@@ -19,6 +19,9 @@ export function authRoutes(app: FastifyInstance, deps: AppDeps): void {
     const { email, password } = (request.body ?? {}) as { email?: string; password?: string };
     const retry = signupLimiter.hit(`signup:${request.ip}`);
     if (retry !== null) return reply.code(429).header('retry-after', String(retry)).send(LIMIT_BODY);
+    if (deps.accountCap !== undefined && deps.store.countUsers() >= deps.accountCap) {
+      return reply.code(403).send({ error: 'Signups are closed on this server.' });
+    }
     if (!email || !EMAIL_RE.test(email)) {
       return reply.code(400).send({ error: 'Enter a valid email address.' });
     }

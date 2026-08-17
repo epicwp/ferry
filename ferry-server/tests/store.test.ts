@@ -233,4 +233,14 @@ describe('Store', () => {
       store.close();
     });
   });
+
+  describe('countUsers', () => {
+    it('counts all users', () => {
+      const store = new Store(':memory:');
+      expect(store.countUsers()).toBe(0);
+      store.createUser('a@example.com', 'hash-a');
+      store.createUser('b@example.com', 'hash-b');
+      expect(store.countUsers()).toBe(2);
+    });
+  });
 });
