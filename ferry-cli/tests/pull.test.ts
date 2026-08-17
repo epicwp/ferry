@@ -111,7 +111,7 @@ describe('pull', () => {
     expect(result.provenance.reused).toBe(0);
     expect(result.provenance.reconstructed).toBe(0);
     expect(existsSync(join(home, 'sites/fixture/provenance.json'))).toBe(true);
-    expect(env.calls).toEqual(['provision', 'importDb', 'binlogPosition', 'createAdmin']);
+    expect(env.calls).toEqual(['provision', 'deployFiles', 'importDb', 'binlogPosition', 'createAdmin']);
     expect(env.wpConfigPresentAtImport).toBe(true);
     expect(readFileSync(join(clonePath, 'index.php'), 'utf8')).toBe('<?php // wp');
     expect(existsSync(join(clonePath, 'wp-content/object-cache.php.ferry-disabled'))).toBe(true);

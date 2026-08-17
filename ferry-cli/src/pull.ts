@@ -99,6 +99,9 @@ export async function pull(slug: string, deps: PullDeps = {}, opts: PullOpts = {
   progress({ phase: 'import' });
 
   await envReady;                                         // join (§4.6)
+  await env.deployFiles(docroot);                         // remote substrates serve a shipped copy; local: no-op
+  const postProvision = loadProfile(slug);
+  if (postProvision.flySited?.parityNote) progress({ phase: 'import', detail: postProvision.flySited.parityNote });
   await env.importDb(docroot, dump);
   profile.binlog = await env.binlogPosition(docroot);      // journal window starts here (Task 10)
   saveProfile(profile);

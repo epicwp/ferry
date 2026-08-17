@@ -1,13 +1,14 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { cloneEnv } from '../../ferry-cli/src/env/index.js';
 import { ferryHome, loadProfile } from '../../ferry-cli/src/profile.js';
 import { buildApp } from './app.js';
 import { ensureAgentBranch } from './agent/branch.js';
 import type { AgentManager } from './agent/manager.js';
 import { sdkRunner } from './agent/sdk-runner.js';
 import { ChangeService, type CreateChangeInput } from './changes.js';
-import { accountCap, listenHost, secureCookies } from './env-config.js';
+import { accountCap, cloneEnvKind, listenHost, secureCookies } from './env-config.js';
 import { applyEnvFile } from './env-file.js';
 import { realEngine, realPushRunner } from './engine.js';
 import { Lifecycle } from './lifecycle.js';
@@ -71,9 +72,11 @@ if (!agentDepsForMain) {
 const pluginDir = fileURLToPath(new URL('../../ferry-plugin', import.meta.url));
 const distDir = fileURLToPath(new URL('../../ferry-dashboard/dist', import.meta.url));
 const lifecycle = new Lifecycle();
+const envKind = cloneEnvKind(process.env);
+const substrate = cloneEnv(envKind);
 const app = buildApp({
   store,
-  engine: realEngine(),
+  engine: realEngine({ env: substrate }),
   pluginZip: buildPluginZip(pluginDir),
   staticDir: existsSync(distDir) ? distDir : undefined,
   agent: agentDepsForMain,

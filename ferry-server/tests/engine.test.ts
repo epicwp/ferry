@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { realEngine, type VerifyFetch } from '../src/engine.js';
+import type { CloneEnv } from '../../ferry-cli/src/env/ddev.js';
 
 function fakeResponse(statusCode: number, body: string): { statusCode: number; body: { text(): Promise<string> } } {
   return { statusCode, body: { text: async () => body } };
@@ -35,7 +36,20 @@ describe('realEngine().verifyClone', () => {
     expect(calls).toBe(3);
   });
 
-  it('reports a TLS trust failure immediately, naming the cause and the fix', async () => {
+  it('reports a TLS trust failure immediately, naming the cause and the DDEV fix', async () => {
+    const verifyFetch: VerifyFetch = vi.fn(async () => {
+      throw new Error('unable to get local issuer certificate');
+    });
+    const engine = realEngine({ verifyFetch });
+    const result = await engine.verifyClone('https://clone.ddev.site');
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('local issuer');
+    expect(result.detail).toContain('NODE_EXTRA_CA_CERTS');
+    // no retry for a trust failure — it can't fix itself by waiting
+    expect(verifyFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('omits the DDEV/mkcert hint for non-DDEV URLs', async () => {
     const verifyFetch: VerifyFetch = vi.fn(async () => {
       throw new Error('unable to get local issuer certificate');
     });
@@ -43,9 +57,7 @@ describe('realEngine().verifyClone', () => {
     const result = await engine.verifyClone('https://clone.test');
     expect(result.ok).toBe(false);
     expect(result.detail).toContain('local issuer');
-    expect(result.detail).toContain('NODE_EXTRA_CA_CERTS');
-    // no retry for a trust failure — it can't fix itself by waiting
-    expect(verifyFetch).toHaveBeenCalledTimes(1);
+    expect(result.detail).not.toContain('NODE_EXTRA_CA_CERTS');
   });
 
   it('gives up after the 30s deadline, citing the last HTTP status', async () => {
@@ -88,4 +100,12 @@ describe('realEngine().verifyClone', () => {
       server.close();
     }
   }, 35_000); // red case burns the full 30s verify deadline; green resolves on the first attempt
+});
+
+describe('realEngine().cloneUrl', () => {
+  it('cloneUrl comes from the injected env', () => {
+    const env = { url: (n: string) => `https://${n}.custom.example` } as unknown as CloneEnv;
+    const engine = realEngine({ env });
+    expect(engine.cloneUrl('mysite')).toBe('https://mysite.custom.example');
+  });
 });
