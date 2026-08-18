@@ -1,7 +1,11 @@
 <?php
 namespace Ferry;
 
-/** §3.3: stop cleanly at ~70% of max_execution_time - timeouts are answers, not errors. */
+/**
+ * §3.3: stop cleanly at ~50% of max_execution_time, clamped to a 20s ceiling -
+ * timeouts are answers, not errors. The clamp matters on hosts that enforce a
+ * CPU/resource limit that fires well before wall-clock max_execution_time.
+ */
 final class Budget
 {
     /** @var float */
@@ -11,7 +15,7 @@ final class Budget
     {
         if ($limit_seconds === null) {
             $max = (int) ini_get('max_execution_time');
-            $limit_seconds = ($max > 0 ? $max : 30) * 0.7;
+            $limit_seconds = min(($max > 0 ? $max : 30) * 0.5, 20.0);
         }
         $this->deadline = microtime(true) + $limit_seconds;
     }
