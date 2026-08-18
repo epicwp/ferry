@@ -92,7 +92,15 @@ final class Db
         }
         $last = $after;
         $complete = false;
-        while (strlen($out) < $byte_budget && !$budget->exhausted()) {
+        // $chunks_done gates the byte/time budget checks so the FIRST chunk of a request is
+        // always fetched, even if the budget is already exhausted (e.g. the pre-loop metadata
+        // queries above ate the whole window on a slow host) - otherwise this call would make
+        // zero progress and the CLI would abort instead of resuming.
+        $chunks_done = 0;
+        while (true) {
+            if ($chunks_done > 0 && (strlen($out) >= $byte_budget || $budget->exhausted())) {
+                break;
+            }
             $rows = self::fetch_chunk($wpdb, $table, $pk, $last, $before, $chunk_rows, $where);
             if ($rows === []) {
                 $complete = true;
@@ -109,6 +117,7 @@ final class Db
             $out .= "INSERT INTO `$table` VALUES\n" . implode(",\n", $tuples) . ";\n";
             $last_row = $rows[count($rows) - 1];
             $last = $pk !== null ? (int) $last_row[$pk] : $last + count($rows);
+            $chunks_done++;
             if (count($rows) < $chunk_rows) {
                 $complete = true;
                 break;
