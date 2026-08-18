@@ -8,14 +8,16 @@ interface Recorded {
   body?: string;
 }
 
-/** Records every call; replays `responses` in order (last one repeats once exhausted). */
+/** Records every call; replays `responses` in order (last one repeats once exhausted).
+ *  `body` is JSON.stringify'd unless it's already a string, in which case it's sent
+ *  verbatim as the raw wire text (used to simulate empty/whitespace bodies). */
 function fakeFetch(calls: Recorded[], responses: Array<{ status: number; body: unknown }>): FlyFetch {
   let i = 0;
   return async (url, init) => {
     calls.push({ url, method: init.method, headers: init.headers, body: init.body });
     const r = responses[Math.min(i, responses.length - 1)];
     i++;
-    return { status: r.status, json: async () => r.body };
+    return { status: r.status, text: async () => (typeof r.body === 'string' ? r.body : JSON.stringify(r.body)) };
   };
 }
 
@@ -121,6 +123,51 @@ describe('FlyApi.destroyApp', () => {
     expect(calls[0].url).toBe('https://api.machines.dev/v1/apps/ferry-s-x?force=true');
     expect(calls[0].method).toBe('DELETE');
     expect(calls[0].headers.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('resolves without throwing when Fly returns 202 with an empty body', async () => {
+    const calls: Recorded[] = [];
+    const api = new FlyApi({ token: TOKEN }, fakeFetch(calls, [{ status: 202, body: '' }]));
+    await expect(api.destroyApp('ferry-s-x')).resolves.toBeUndefined();
+  });
+});
+
+describe('empty 2xx bodies', () => {
+  it('createApp treats a 201 empty body as success, not a parse crash', async () => {
+    const calls: Recorded[] = [];
+    const api = new FlyApi({ token: TOKEN }, fakeFetch(calls, [{ status: 201, body: '' }]));
+    await expect(api.createApp('x', 'personal')).resolves.toBeUndefined();
+  });
+
+  it('treats a whitespace-only 2xx body as empty too', async () => {
+    const calls: Recorded[] = [];
+    const api = new FlyApi({ token: TOKEN }, fakeFetch(calls, [{ status: 202, body: '   \n' }]));
+    await expect(api.destroyApp('ferry-s-x')).resolves.toBeUndefined();
+  });
+
+  it('normal JSON bodies still parse (createVolume still surfaces the id)', async () => {
+    const calls: Recorded[] = [];
+    const api = new FlyApi(
+      { token: TOKEN },
+      fakeFetch(calls, [{ status: 200, body: { id: 'vol_abc123', name: 'data' } }]),
+    );
+    await expect(api.createVolume('ferry-s-x', 'data', 'ams', 3)).resolves.toEqual({ id: 'vol_abc123' });
+  });
+
+  it('createVolume throws a clear error when a 2xx body has no id', async () => {
+    const calls: Recorded[] = [];
+    const api = new FlyApi({ token: TOKEN }, fakeFetch(calls, [{ status: 200, body: '' }]));
+    await expect(api.createVolume('ferry-s-x', 'data', 'ams', 3)).rejects.toThrow(
+      /fly api POST .*\/apps\/ferry-s-x\/volumes → missing id in response/,
+    );
+  });
+
+  it('createMachine throws a clear error when a 2xx body has no id', async () => {
+    const calls: Recorded[] = [];
+    const api = new FlyApi({ token: TOKEN }, fakeFetch(calls, [{ status: 200, body: {} }]));
+    await expect(api.createMachine('ferry-s-x', 'ams', {})).rejects.toThrow(
+      /fly api POST .*\/apps\/ferry-s-x\/machines → missing id in response/,
+    );
   });
 });
 

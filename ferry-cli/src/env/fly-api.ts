@@ -10,7 +10,7 @@ export interface FlyFetch {
   (
     url: string,
     init: { method: string; headers: Record<string, string>; body?: string },
-  ): Promise<{ status: number; json(): Promise<unknown> }>;
+  ): Promise<{ status: number; text(): Promise<string> }>;
 }
 
 const defaultFetch: FlyFetch = async (url, init) => {
@@ -19,7 +19,7 @@ const defaultFetch: FlyFetch = async (url, init) => {
     headers: init.headers,
     body: init.body,
   });
-  return { status: res.statusCode, json: () => res.body.json() };
+  return { status: res.statusCode, text: () => res.body.text() };
 };
 
 const ALLOCATE_IP_MUTATION = `mutation($input: AllocateIPAddressInput!) {
@@ -52,18 +52,22 @@ export class FlyApi {
   }
 
   async createVolume(app: string, name: string, region: string, sizeGb: number): Promise<{ id: string }> {
-    const data = (await this.rest('POST', `${this.apiBase}/apps/${app}/volumes`, {
-      name,
-      size_gb: sizeGb,
-      region,
-    })) as { id: string };
+    const method = 'POST';
+    const url = `${this.apiBase}/apps/${app}/volumes`;
+    const data = (await this.rest(method, url, { name, size_gb: sizeGb, region })) as { id?: string } | undefined;
+    if (!data?.id) {
+      throw new Error(`fly api ${method} ${url} → missing id in response`);
+    }
     return { id: data.id };
   }
 
   async createMachine(app: string, region: string, config: Record<string, unknown>): Promise<{ id: string }> {
-    const data = (await this.rest('POST', `${this.apiBase}/apps/${app}/machines`, { region, config })) as {
-      id: string;
-    };
+    const method = 'POST';
+    const url = `${this.apiBase}/apps/${app}/machines`;
+    const data = (await this.rest(method, url, { region, config })) as { id?: string } | undefined;
+    if (!data?.id) {
+      throw new Error(`fly api ${method} ${url} → missing id in response`);
+    }
     return { id: data.id };
   }
 
@@ -84,7 +88,13 @@ export class FlyApi {
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`fly api ${method} ${url} → ${res.status}`);
     }
-    return res.json();
+    // Fly's Machines API can return a 2xx with an empty body (e.g. DELETE .../apps/{app}
+    // responds 202 with nothing) - JSON.parse('') throws, so treat empty/whitespace as no body.
+    const text = await res.text();
+    if (text.trim() === '') {
+      return undefined;
+    }
+    return JSON.parse(text);
   }
 
   private async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
@@ -97,7 +107,7 @@ export class FlyApi {
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`fly api POST ${url} → ${res.status}`);
     }
-    const data = (await res.json()) as { errors?: Array<{ message: string }> };
+    const data = JSON.parse(await res.text()) as { errors?: Array<{ message: string }> };
     if (data.errors && data.errors.length > 0) {
       throw new Error(`fly graphql error: ${data.errors[0].message}`);
     }
