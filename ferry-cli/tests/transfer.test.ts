@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -124,6 +124,29 @@ async function buildBatchBuffer(
   return Buffer.concat(chunks);
 }
 
+/** Same as buildBatchBuffer but for an arbitrary set of already-on-disk files - lets
+ *  split/fallback tests build a real (truncatable) archive for whichever path subset a
+ *  given batch request asks for. */
+async function buildBatchFromDir(
+  srcDir: string,
+  paths: string[],
+  complete: boolean,
+  nextIndex: number,
+): Promise<Buffer> {
+  const staging = mkdtempSync(join(tmpdir(), 'ferry-batch-'));
+  for (const p of paths) {
+    cpSync(join(srcDir, p), join(staging, p));
+  }
+  writeFileSync(join(staging, '.ferry-meta.json'), JSON.stringify({ complete, next_index: nextIndex, skipped: [] }));
+  const chunks: Buffer[] = [];
+  const stream = tar.c({ gzip: true, cwd: staging }, [...paths, '.ferry-meta.json']);
+  for await (const c of stream) {
+    chunks.push(c as Buffer);
+  }
+  rmSync(staging, { recursive: true, force: true });
+  return Buffer.concat(chunks);
+}
+
 /** Simulates a connection smothered mid-stream (e.g. undici's SocketError on a premature
  *  close): a few bytes arrive, then the stream errors instead of ending cleanly. */
 function erroringStream(partial: Buffer, message: string): Readable {
@@ -156,13 +179,111 @@ describe('fetchAll retry (fake streaming client)', () => {
     expect(state.calls).toBe(2);
   });
 
-  it('fetchBatch: gives up after 4 attempts when the batch stream keeps truncating', async () => {
+  it('fetchBatch: a lone path that truncates on both the batch and the range fallback throws a terminal error naming it', async () => {
+    // Every request (batch or range) gets the same truncated buffer, regardless of what it
+    // asked for - so both the batch attempt AND the byte-range fallback it recurses to are
+    // unrecoverable. This is Layer 2's floor: split bottoms out at one path, that path's
+    // batch fetch is exhausted, its range fallback is exhausted too, so fetchBatch must throw
+    // a clear terminal error rather than loop forever or silently drop the file.
     const valid = await buildBatchBuffer('a.txt', 'hello from a', true, 1);
     const truncated = valid.subarray(0, Math.floor(valid.length * 0.6));
     const { client, state } = fakeStreamClient(() => Readable.from(truncated));
     const entries = [{ path: 'a.txt', size: 12, hash: null }];
-    await expect(fetchAll(client, entries, dest, { maxBytes: 100 })).rejects.toThrow(/unexpected end of file/);
-    expect(state.calls).toBe(4);
+    await expect(fetchAll(client, entries, dest, { maxBytes: 100 })).rejects.toThrow(
+      /a\.txt.*unrecoverable.*batch.*byte-range/is,
+    );
+    // 4 attempts on the batch endpoint, then 4 more on the range fallback for the same file.
+    expect(state.calls).toBe(8);
+  });
+
+  it('fetchBatch: splits a truncating multi-file batch in half and succeeds on the smaller batches', async () => {
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'ferry-split-fixture-'));
+    const files = [
+      { path: 'p0.txt', content: 'file zero contents' },
+      { path: 'p1.txt', content: 'file one contents!' },
+      { path: 'p2.txt', content: 'file two contents!!' },
+      { path: 'p3.txt', content: 'file three contents' },
+    ];
+    for (const f of files) writeFileSync(join(fixtureDir, f.path), f.content);
+    const SPLIT_THRESHOLD = 2; // batches of > 2 paths truncate; <= 2 succeed
+    const requestedPaths: string[][] = [];
+    const client = {
+      postStream: async (_route: string, body: any) => {
+        const paths: string[] = body.paths;
+        requestedPaths.push(paths);
+        const full = await buildBatchFromDir(fixtureDir, paths, true, paths.length);
+        const stream =
+          paths.length > SPLIT_THRESHOLD ? full.subarray(0, Math.floor(full.length * 0.5)) : full;
+        return { stream: Readable.from(stream), headers: {}, statusCode: 200 };
+      },
+    } as unknown as FerryClient;
+
+    const entries = files.map((f) => ({ path: f.path, size: Buffer.byteLength(f.content), hash: null }));
+    const progressSteps: [number, number][] = [];
+    await fetchAll(client, entries, dest, {
+      maxBytes: 1000, // all 4 files fit in a single bin-packed batch
+      onProgress: (done, total) => progressSteps.push([done, total]),
+    });
+
+    for (const f of files) {
+      expect(readFileSync(join(dest, f.path), 'utf8')).toBe(f.content);
+    }
+    // The original 4-path batch was attempted (and truncated) before being split into halves
+    // of <= SPLIT_THRESHOLD paths each, which succeeded.
+    expect(requestedPaths.some((p) => p.length === 4)).toBe(true);
+    expect(requestedPaths.filter((p) => p.length > 0 && p.length <= SPLIT_THRESHOLD).length).toBeGreaterThanOrEqual(2);
+    // fetchAll reports progress once per bin-packed batch, after the whole (possibly split)
+    // group resolves - so despite the internal split, each file is still counted exactly once.
+    expect(progressSteps).toEqual([[4, 4]]);
+
+    rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
+  it('fetchBatch: recurses batch -> single file, then falls back to the byte-range endpoint for the one path that keeps truncating', async () => {
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'ferry-fallback-fixture-'));
+    const pathA = 'stubborn.bin';
+    const contentA = Buffer.from('A'.repeat(37));
+    const pathB = 'friendly.txt';
+    const contentB = 'friendly file contents';
+    writeFileSync(join(fixtureDir, pathA), contentA);
+    writeFileSync(join(fixtureDir, pathB), contentB);
+
+    const rangeCalls: { path: string; offset: number; length: number }[] = [];
+    const client = {
+      postStream: async (_route: string, body: any) => {
+        if (body.path !== undefined) {
+          rangeCalls.push(body);
+          const data = readFileSync(join(fixtureDir, body.path));
+          return {
+            stream: Readable.from(data.subarray(body.offset, body.offset + body.length)),
+            headers: {},
+            statusCode: 200,
+          };
+        }
+        const paths: string[] = body.paths;
+        const full = await buildBatchFromDir(fixtureDir, paths, true, paths.length);
+        // The 2-path batch always truncates (forcing a split); once split, pathA's lone
+        // single-file batch keeps truncating too (forcing the range fallback), but pathB's
+        // lone single-file batch succeeds normally.
+        const shouldTruncate = paths.length > 1 || paths[0] === pathA;
+        const stream = shouldTruncate ? full.subarray(0, Math.floor(full.length * 0.5)) : full;
+        return { stream: Readable.from(stream), headers: {}, statusCode: 200 };
+      },
+    } as unknown as FerryClient;
+
+    const entries = [
+      { path: pathA, size: contentA.length, hash: null },
+      { path: pathB, size: Buffer.byteLength(contentB), hash: null },
+    ];
+    await fetchAll(client, entries, dest, { maxBytes: 1000 });
+
+    expect(readFileSync(join(dest, pathB), 'utf8')).toBe(contentB);
+    expect(readFileSync(join(dest, pathA))).toEqual(contentA);
+    // pathA was only ever recovered via the range endpoint.
+    expect(rangeCalls.length).toBeGreaterThan(0);
+    expect(rangeCalls.every((c) => c.path === pathA)).toBe(true);
+
+    rmSync(fixtureDir, { recursive: true, force: true });
   });
 
   it('fetchBatch: does not retry a non-transport (security guard) error', async () => {

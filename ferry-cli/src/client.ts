@@ -72,8 +72,10 @@ export class FerryClient {
   ): Promise<{ stream: Readable; headers: IncomingHttpHeaders; statusCode: number }> {
     const raw = JSON.stringify(body);
     // §hardening: shared hosting can smother a PHP response mid-stream; a tight body timeout
-    // turns that into a fast, retryable failure instead of undici's 300s default stall.
-    const res = await this.send('POST', route, {}, raw, { headersTimeout: 30_000, bodyTimeout: 60_000 });
+    // turns that into a fast, retryable failure instead of undici's 300s default stall. 120s
+    // (not 60s) because SiteGround-style CPU throttling can stall a still-alive stream for
+    // tens of seconds between flushes - 60s risked aborting a slow-but-alive transfer.
+    const res = await this.send('POST', route, {}, raw, { headersTimeout: 30_000, bodyTimeout: 120_000 });
     if (res.statusCode !== 200) {
       const text = await res.body.text();
       throw new Error(`POST ${route} failed (${res.statusCode}): ${text.slice(0, 300)}`);
