@@ -102,11 +102,21 @@ export function isTransferRetryable(err: unknown): boolean {
   );
 }
 
-/** Retries a streaming fetch+consume unit up to TRANSFER_RETRY_ATTEMPTS times with exponential
- *  backoff when it fails with a transport/stream error; re-throws immediately otherwise. */
-async function withTransferRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+/** Thrown by withTransferRetry only when a *retryable* error survives every attempt - lets
+ *  fetchBatch tell "give up, try something smaller" apart from a non-retryable error (e.g. the
+ *  path-traversal guard), which must propagate immediately without splitting. */
+class TransferExhaustedError extends Error {}
+
+/** Retries a streaming fetch+consume unit up to `attempts` times (default
+ *  TRANSFER_RETRY_ATTEMPTS) with exponential backoff when it fails with a transport/stream
+ *  error; re-throws immediately otherwise. */
+async function withTransferRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+  attempts: number = TRANSFER_RETRY_ATTEMPTS,
+): Promise<T> {
   let lastError: unknown;
-  for (let attempt = 1; attempt <= TRANSFER_RETRY_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       return await fn();
     } catch (err) {
@@ -114,29 +124,90 @@ async function withTransferRetry<T>(label: string, fn: () => Promise<T>): Promis
         throw err;
       }
       lastError = err;
-      if (attempt === TRANSFER_RETRY_ATTEMPTS) {
+      if (attempt === attempts) {
         break;
       }
       await sleep(500 * 2 ** attempt);
     }
   }
-  throw new Error(
-    `${label}: still failing after ${TRANSFER_RETRY_ATTEMPTS} attempts (transport failure). Last error: ${String(lastError)}`,
+  throw new TransferExhaustedError(
+    `${label}: still failing after ${attempts} attempt${attempts === 1 ? '' : 's'} (transport failure). Last error: ${String(lastError)}`,
   );
 }
 
-async function fetchBatch(client: FerryClient, paths: string[], destDir: string): Promise<string[]> {
-  let remaining = paths;
+/** Fetches a group of files via the batch endpoint. Some shared hosts kill the plugin's PHP
+ *  process mid-response once a batch's output crosses a CPU-seconds threshold - the response
+ *  arrives cleanly closed but truncated, deterministically, so the per-request retry above
+ *  cannot help. When a multi-path batch is still failing with a retryable error after
+ *  exhausting that retry, split the path list in half and fetch each half independently
+ *  (sequentially, not concurrently, so a struggling host isn't re-piled with parallel
+ *  requests). This recurses and bottoms out at a single path: splitting stops there and falls
+ *  back to the byte-range endpoint (fetchOversized) instead, which streams the one file in much
+ *  smaller pieces. If even that fails after its own retries, the file is unrecoverable on this
+ *  host and we throw a terminal error naming it.
+ *
+ *  `level` (0 at the top, incremented on every split) controls how many attempts a node gets
+ *  before splitting further: only the top-level call - the original bin-packed group from
+ *  fetchAll - gets the full TRANSFER_RETRY_ATTEMPTS retry, keeping that behavior unchanged.
+ *  A batch that already truncated once at a given size is deterministic (that's the whole
+ *  root cause), so re-retrying the SAME size at every level below the top would just stack
+ *  exponential backoff (~7s per doomed node) across the whole split tree for no benefit -
+ *  split levels get a single attempt and move straight to splitting again. The single-file
+ *  byte-range fallback (fetchOversized) is a different, lighter request shape and always
+ *  keeps its own full retry regardless of level. */
+async function fetchBatch(
+  client: FerryClient,
+  entries: ManifestEntry[],
+  destDir: string,
+  level = 0,
+): Promise<string[]> {
+  let remaining = entries;
   const skipped: string[] = [];
+  const attempts = level === 0 ? TRANSFER_RETRY_ATTEMPTS : 1;
   while (remaining.length > 0) {
-    const meta = await withTransferRetry('file batch fetch', async () => {
-      const { stream } = await client.postStream('/ferry/v1/files', { paths: remaining });
-      const chunks: Buffer[] = [];
-      for await (const c of stream) {
-        chunks.push(c as Buffer);
+    let meta: BatchMeta;
+    try {
+      meta = await withTransferRetry(
+        'file batch fetch',
+        async () => {
+          const { stream } = await client.postStream('/ferry/v1/files', { paths: remaining.map((e) => e.path) });
+          const chunks: Buffer[] = [];
+          for await (const c of stream) {
+            chunks.push(c as Buffer);
+          }
+          return extractBatch(Buffer.concat(chunks), destDir);
+        },
+        attempts,
+      );
+    } catch (batchErr) {
+      if (!(batchErr instanceof TransferExhaustedError)) {
+        throw batchErr;
       }
-      return extractBatch(Buffer.concat(chunks), destDir);
-    });
+      if (remaining.length > 1) {
+        const mid = Math.ceil(remaining.length / 2);
+        const first = remaining.slice(0, mid);
+        const second = remaining.slice(mid);
+        console.warn(
+          `[ferry] file batch of ${remaining.length} truncated after retries - splitting into ${first.length} + ${second.length} and retrying`,
+        );
+        skipped.push(...(await fetchBatch(client, first, destDir, level + 1)));
+        skipped.push(...(await fetchBatch(client, second, destDir, level + 1)));
+        return skipped;
+      }
+      const entry = remaining[0];
+      console.warn(
+        `[ferry] ${entry.path} still truncates as a lone batch after retries - falling back to the byte-range endpoint`,
+      );
+      try {
+        await fetchOversized(client, entry, destDir);
+      } catch (rangeErr) {
+        throw new Error(
+          `${entry.path}: unrecoverable - both the batch endpoint and the byte-range fallback kept truncating after ` +
+            `retries (host is likely killing the request mid-response). Range error: ${String(rangeErr)} Batch error: ${String(batchErr)}`,
+        );
+      }
+      return skipped;
+    }
     skipped.push(...meta.skipped);
     if (meta.complete) {
       break;
@@ -215,7 +286,7 @@ export async function fetchAll(
   const skippedLists = await Promise.all(
     batches.map((b) =>
       limit(async () => {
-        const skipped = await fetchBatch(client, b.map((e) => e.path), destDir);
+        const skipped = await fetchBatch(client, b, destDir);
         done += b.length;
         opts.onProgress?.(done, total);
         return skipped;
