@@ -71,7 +71,9 @@ export class FerryClient {
     body: unknown,
   ): Promise<{ stream: Readable; headers: IncomingHttpHeaders; statusCode: number }> {
     const raw = JSON.stringify(body);
-    const res = await this.send('POST', route, {}, raw);
+    // §hardening: shared hosting can smother a PHP response mid-stream; a tight body timeout
+    // turns that into a fast, retryable failure instead of undici's 300s default stall.
+    const res = await this.send('POST', route, {}, raw, { headersTimeout: 30_000, bodyTimeout: 60_000 });
     if (res.statusCode !== 200) {
       const text = await res.body.text();
       throw new Error(`POST ${route} failed (${res.statusCode}): ${text.slice(0, 300)}`);
@@ -88,6 +90,7 @@ export class FerryClient {
     route: string,
     query: Record<string, string>,
     body: string,
+    requestOpts?: Pick<Dispatcher.RequestOptions, 'headersTimeout' | 'bodyTimeout'>,
   ): Promise<Dispatcher.ResponseData> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -108,6 +111,7 @@ export class FerryClient {
             'x-ferry-nonce': nonce,
             'x-ferry-signature': sign(this.secret, method, route, query, body, timestamp, nonce),
           },
+          ...requestOpts,
         });
       } catch (err) {
         lastError = err;

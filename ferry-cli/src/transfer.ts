@@ -3,6 +3,7 @@ import { createWriteStream, promises as fsp } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { finished, pipeline } from 'node:stream/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { createGunzip } from 'node:zlib';
 import pLimit from 'p-limit';
 import * as tar from 'tar';
@@ -75,16 +76,64 @@ export async function extractBatch(buffer: Buffer, destDir: string): Promise<Bat
   return JSON.parse(metaRaw) as BatchMeta;
 }
 
+const TRANSFER_RETRY_ATTEMPTS = 4;
+
+/** Transport/stream failures a smothered shared-hosting connection produces mid-body -
+ *  truncated gzip, undici's body/headers timeout, a reset socket, or a batch that lost its
+ *  trailing meta entry. Security guards (e.g. the path-traversal refusal) must never loop. */
+function isTransferRetryable(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes('refusing')) {
+    return false;
+  }
+  return (
+    msg.includes('unexpected end of file') ||
+    msg.includes('UND_ERR') ||
+    msg.includes('bodyTimeout') ||
+    msg.includes('headersTimeout') ||
+    msg.includes('terminated') ||
+    msg.includes('ECONNRESET') ||
+    msg.includes('socket hang up') ||
+    msg.includes('other side closed') ||
+    msg.includes('missing its .ferry-meta.json trailer')
+  );
+}
+
+/** Retries a streaming fetch+consume unit up to TRANSFER_RETRY_ATTEMPTS times with exponential
+ *  backoff when it fails with a transport/stream error; re-throws immediately otherwise. */
+async function withTransferRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= TRANSFER_RETRY_ATTEMPTS; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isTransferRetryable(err)) {
+        throw err;
+      }
+      lastError = err;
+      if (attempt === TRANSFER_RETRY_ATTEMPTS) {
+        break;
+      }
+      await sleep(500 * 2 ** attempt);
+    }
+  }
+  throw new Error(
+    `${label}: still failing after ${TRANSFER_RETRY_ATTEMPTS} attempts (transport failure). Last error: ${String(lastError)}`,
+  );
+}
+
 async function fetchBatch(client: FerryClient, paths: string[], destDir: string): Promise<string[]> {
   let remaining = paths;
   const skipped: string[] = [];
   while (remaining.length > 0) {
-    const { stream } = await client.postStream('/ferry/v1/files', { paths: remaining });
-    const chunks: Buffer[] = [];
-    for await (const c of stream) {
-      chunks.push(c as Buffer);
-    }
-    const meta = await extractBatch(Buffer.concat(chunks), destDir);
+    const meta = await withTransferRetry('file batch fetch', async () => {
+      const { stream } = await client.postStream('/ferry/v1/files', { paths: remaining });
+      const chunks: Buffer[] = [];
+      for await (const c of stream) {
+        chunks.push(c as Buffer);
+      }
+      return extractBatch(Buffer.concat(chunks), destDir);
+    });
     skipped.push(...meta.skipped);
     if (meta.complete) {
       break;
@@ -110,23 +159,28 @@ async function fetchOversized(client: FerryClient, entry: { path: string; size: 
   out.on('error', (err) => { writeError = err; });
   for (let offset = 0; offset < entry.size; offset += RANGE_CHUNK) {
     if (writeError) throw writeError;
-    const { stream } = await client.postStream('/ferry/v1/files', {
-      path: entry.path,
-      offset,
-      length: Math.min(RANGE_CHUNK, entry.size - offset),
-    });
-    for await (const chunk of stream) {
-      if (writeError) throw writeError;
-      if (!out.write(chunk)) {
-        // 'drain' never fires once the stream has errored, so also resolve on 'error'
-        // (rather than reject) and let the writeError check above/below handle it.
-        await new Promise<void>((resolve) => {
-          const onDrain = () => { out.off('error', onError); resolve(); };
-          const onError = () => { out.off('drain', onDrain); resolve(); };
-          out.once('drain', onDrain);
-          out.once('error', onError);
-        });
+    // Buffer the whole range chunk (<= RANGE_CHUNK, 4MB) before writing it: a retried attempt
+    // re-fetches the same offset from scratch, and writing only after a full, successful fetch
+    // keeps that retry idempotent (no partial-range bytes already landed in `out` to duplicate).
+    const length = Math.min(RANGE_CHUNK, entry.size - offset);
+    const chunkBuffer = await withTransferRetry(`oversized range fetch (${entry.path} @${offset})`, async () => {
+      const { stream } = await client.postStream('/ferry/v1/files', { path: entry.path, offset, length });
+      const parts: Buffer[] = [];
+      for await (const chunk of stream) {
+        parts.push(chunk as Buffer);
       }
+      return Buffer.concat(parts);
+    });
+    if (writeError) throw writeError;
+    if (!out.write(chunkBuffer)) {
+      // 'drain' never fires once the stream has errored, so also resolve on 'error'
+      // (rather than reject) and let the writeError check above/below handle it.
+      await new Promise<void>((resolve) => {
+        const onDrain = () => { out.off('error', onError); resolve(); };
+        const onError = () => { out.off('drain', onDrain); resolve(); };
+        out.once('drain', onDrain);
+        out.once('error', onError);
+      });
     }
   }
   if (writeError) throw writeError;
