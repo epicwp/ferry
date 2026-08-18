@@ -286,6 +286,56 @@ describe('fetchAll retry (fake streaming client)', () => {
     rmSync(fixtureDir, { recursive: true, force: true });
   });
 
+  it('fetchBatch: split levels below the top get one attempt each, bounding total retry cost near 2N (not ~8N)', async () => {
+    // A batch that truncated once at a given size is deterministic (the whole root cause) -
+    // re-retrying the SAME size at every level of the split tree would just stack exponential
+    // backoff for no benefit. So every request here truncates, no matter how small: the top
+    // level still gets the full 4-attempt retry, but every node below it should give up after
+    // a single attempt and split immediately instead of retrying 4x per node.
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'ferry-retrycost-fixture-'));
+    const files = ['q0.txt', 'q1.txt', 'q2.txt', 'q3.txt'].map((path, i) => ({
+      path,
+      content: `contents of file number ${i}`,
+    }));
+    for (const f of files) writeFileSync(join(fixtureDir, f.path), f.content);
+
+    const batchCalls: string[][] = [];
+    const rangeCalls: { path: string }[] = [];
+    const client = {
+      postStream: async (_route: string, body: any) => {
+        if (body.path !== undefined) {
+          rangeCalls.push(body);
+          const data = readFileSync(join(fixtureDir, body.path));
+          return {
+            stream: Readable.from(data.subarray(body.offset, body.offset + body.length)),
+            headers: {},
+            statusCode: 200,
+          };
+        }
+        const paths: string[] = body.paths;
+        batchCalls.push(paths);
+        const full = await buildBatchFromDir(fixtureDir, paths, true, paths.length);
+        return { stream: Readable.from(full.subarray(0, Math.floor(full.length * 0.5))), headers: {}, statusCode: 200 };
+      },
+    } as unknown as FerryClient;
+
+    const entries = files.map((f) => ({ path: f.path, size: Buffer.byteLength(f.content), hash: null }));
+    await fetchAll(client, entries, dest, { maxBytes: 1000 });
+
+    for (const f of files) {
+      expect(readFileSync(join(dest, f.path), 'utf8')).toBe(f.content);
+    }
+    // Split tree for N=4, every node truncating: root gets 4 attempts (top level); the two
+    // 2-file nodes and four 1-file leaves below it get 1 attempt each before moving on
+    // (splitting, or falling back to range) = 4 + 1+1 + 1+1+1+1 = 10 = 2N+2, not the
+    // 4 * (2N-1) = 28 it would be if every node retried in full.
+    expect(batchCalls.length).toBe(10);
+    expect(batchCalls.length).toBeLessThan(8 * files.length);
+    expect(rangeCalls.length).toBe(4); // one lone-file range fetch per leaf, each succeeds first try
+
+    rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
   it('fetchBatch: does not retry a non-transport (security guard) error', async () => {
     const { client, state } = fakeStreamClient(() => {
       throw new Error('refusing range write outside the clone: a.txt');
