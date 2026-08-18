@@ -56,6 +56,21 @@ final class DbExportTest extends TestCase
         $this->assertSame(5, $r['last_key']);
     }
 
+    public function test_exhausted_budget_at_entry_still_makes_one_chunk_of_progress(): void
+    {
+        $wpdb = new FakeWpdb([
+            self::COLUMNS,
+            self::CREATE,
+            [['ID' => '1', 'title' => 'Hello'], ['ID' => '2', 'title' => 'World']], // chunk 1 (full)
+        ]);
+        // Budget is already exhausted before export() is even called (mirrors the tightened
+        // default window's pre-loop metadata-query overhead eating the whole window on a slow host).
+        $r = Db::export($wpdb, 'wp_posts', 'ID', 0, null, new Budget(0.0), 2);
+        $this->assertStringContainsString('INSERT INTO `wp_posts` VALUES', $r['sql'], 'must fetch at least one chunk even when the budget is already exhausted at entry');
+        $this->assertSame(2, $r['last_key'], 'resume cursor must advance past the one chunk fetched');
+        $this->assertFalse($r['complete'], 'loop must stop right after the first chunk once the budget is exhausted');
+    }
+
     public function test_offset_fallback_without_usable_pk(): void
     {
         $wpdb = new FakeWpdb([

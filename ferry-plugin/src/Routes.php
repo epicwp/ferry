@@ -3,6 +3,9 @@ namespace Ferry;
 
 final class Routes
 {
+    /** Cap on cumulative raw bytes streamed per files() response (§ byte-cap hardening). */
+    const BATCH_BYTE_CAP = 4 * 1024 * 1024;
+
     public static function register(): void
     {
         register_rest_route('ferry/v1', '/pair', [
@@ -237,8 +240,9 @@ final class Routes
         $tar = new Tar($write);
         $done = 0;
         $skipped = [];
+        $streamed_bytes = 0;
         foreach ($paths as $relpath) {
-            if ($budget->exhausted()) {
+            if (self::batch_should_stop($done, $budget, $streamed_bytes)) {
                 break;
             }
             $relpath = (string) $relpath;
@@ -258,8 +262,10 @@ final class Routes
             // If the file shrinks between fopen and read, add_stream throws mid-entry and the tar
             // (including its meta trailer) is truncated — the CLI fails loudly on the missing trailer
             // and the pull retries; accepted for v0.
-            $tar->add_stream($relpath, $fh, (int) filesize($abs), (int) filemtime($abs));
+            $size = (int) filesize($abs);
+            $tar->add_stream($relpath, $fh, $size, (int) filemtime($abs));
             fclose($fh);
+            $streamed_bytes += $size;
             $done++;
         }
         $tar->add_file('.ferry-meta.json', (string) json_encode([
@@ -270,6 +276,22 @@ final class Routes
         $tar->finish();
         echo deflate_add($deflate, '', ZLIB_FINISH);
         exit;
+    }
+
+    /**
+     * Pure stop-decision for the files() batch loop. Never stops at $done === 0:
+     * every response must ship at least one file so next_index always advances,
+     * even if the first file alone exceeds the byte cap or the budget is already
+     * exhausted (else the CLI's resume loop never makes progress). Otherwise stops
+     * once the time budget is exhausted or the byte cap is reached — checked
+     * between files only, so a break never corrupts an in-progress tar entry.
+     */
+    public static function batch_should_stop(int $done, Budget $budget, int $streamed_bytes): bool
+    {
+        if ($done === 0) {
+            return false;
+        }
+        return $budget->exhausted() || $streamed_bytes >= self::BATCH_BYTE_CAP;
     }
 
     /** §3.4: byte-range mode for single files larger than a batch. Raw bytes, no tar. */
