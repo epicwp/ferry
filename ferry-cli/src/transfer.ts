@@ -79,23 +79,26 @@ export async function extractBatch(buffer: Buffer, destDir: string): Promise<Bat
 const TRANSFER_RETRY_ATTEMPTS = 4;
 
 /** Transport/stream failures a smothered shared-hosting connection produces mid-body -
- *  truncated gzip, undici's body/headers timeout, a reset socket, or a batch that lost its
- *  trailing meta entry. Security guards (e.g. the path-traversal refusal) must never loop. */
-function isTransferRetryable(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  if (msg.includes('refusing')) {
+ *  truncated gzip (zlib sets code Z_BUF_ERROR), undici's body/headers timeout or a reset/closed
+ *  socket (all carry UND_ERR* codes), or a batch that lost its trailing meta entry. Checked by
+ *  `.code` first (undici/zlib errors carry one; their `.message` text does not name the code),
+ *  falling back to message substrings for errors that only surface as text. Security guards
+ *  (e.g. the path-traversal refusal) are excluded first and must never loop. */
+export function isTransferRetryable(err: unknown): boolean {
+  const message =
+    typeof (err as { message?: unknown })?.message === 'string' ? (err as { message: string }).message : String(err);
+  if (message.includes('refusing')) {
     return false;
   }
+  const code = typeof (err as { code?: unknown })?.code === 'string' ? (err as { code: string }).code : undefined;
+  if (code !== undefined && (code.startsWith('UND_ERR') || code === 'ECONNRESET' || code === 'Z_BUF_ERROR')) {
+    return true;
+  }
   return (
-    msg.includes('unexpected end of file') ||
-    msg.includes('UND_ERR') ||
-    msg.includes('bodyTimeout') ||
-    msg.includes('headersTimeout') ||
-    msg.includes('terminated') ||
-    msg.includes('ECONNRESET') ||
-    msg.includes('socket hang up') ||
-    msg.includes('other side closed') ||
-    msg.includes('missing its .ferry-meta.json trailer')
+    message.includes('unexpected end of file') ||
+    message.includes('other side closed') ||
+    message.includes('ECONNRESET') ||
+    message.includes('missing its .ferry-meta.json trailer')
   );
 }
 
@@ -169,7 +172,15 @@ async function fetchOversized(client: FerryClient, entry: { path: string; size: 
       for await (const chunk of stream) {
         parts.push(chunk as Buffer);
       }
-      return Buffer.concat(parts);
+      const buf = Buffer.concat(parts);
+      // A short read with no stream error (connection closed clean but early) is still a
+      // smothered range - fail it in a retryable-shaped way rather than write a truncated file.
+      if (buf.length !== length) {
+        throw new Error(
+          `oversized range fetch got ${buf.length} of ${length} bytes for ${entry.path}@${offset} - other side closed early`,
+        );
+      }
+      return buf;
     });
     if (writeError) throw writeError;
     if (!out.write(chunkBuffer)) {

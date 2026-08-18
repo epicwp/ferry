@@ -6,7 +6,7 @@ import { gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as tar from 'tar';
 import { FerryClient } from '../src/client.js';
-import { fetchAll, isMetaEntry, extractBatch } from '../src/transfer.js';
+import { fetchAll, isMetaEntry, extractBatch, isTransferRetryable } from '../src/transfer.js';
 import { startMockPlugin, sizeOf, type MockPlugin } from './helpers/mockPlugin.js';
 
 // Retry backoff (500ms * 2**attempt) would otherwise add real seconds to these tests -
@@ -124,8 +124,8 @@ async function buildBatchBuffer(
   return Buffer.concat(chunks);
 }
 
-/** Simulates a connection smothered mid-stream (undici's "terminated"/UND_ERR_SOCKET on a
- *  premature close): a few bytes arrive, then the stream errors instead of ending cleanly. */
+/** Simulates a connection smothered mid-stream (e.g. undici's SocketError on a premature
+ *  close): a few bytes arrive, then the stream errors instead of ending cleanly. */
 function erroringStream(partial: Buffer, message: string): Readable {
   const r = new Readable({ read() {} });
   process.nextTick(() => {
@@ -177,7 +177,7 @@ describe('fetchAll retry (fake streaming client)', () => {
   it('fetchOversized: retries a broken range fetch without duplicating bytes', async () => {
     const full = Buffer.from('Y'.repeat(20));
     const { client, state } = fakeStreamClient((attempt) =>
-      attempt === 1 ? erroringStream(full.subarray(0, 8), 'terminated') : Readable.from(full),
+      attempt === 1 ? erroringStream(full.subarray(0, 8), 'other side closed') : Readable.from(full),
     );
     const entries = [{ path: 'big.bin', size: full.length, hash: null }];
     await fetchAll(client, entries, dest, { maxBytes: 4 }); // forces the oversized/range path
@@ -185,6 +185,33 @@ describe('fetchAll retry (fake streaming client)', () => {
     expect(written.length).toBe(full.length);
     expect(written.equals(full)).toBe(true);
     expect(state.calls).toBe(2);
+  });
+
+  it('fetchOversized: retries a short range read that ends cleanly (no stream error)', async () => {
+    const full = Buffer.from('Z'.repeat(20));
+    const { client, state } = fakeStreamClient((attempt) =>
+      attempt === 1 ? Readable.from(full.subarray(0, 8)) : Readable.from(full),
+    );
+    const entries = [{ path: 'short.bin', size: full.length, hash: null }];
+    await fetchAll(client, entries, dest, { maxBytes: 4 });
+    const written = readFileSync(join(dest, 'short.bin'));
+    expect(written.length).toBe(full.length);
+    expect(written.equals(full)).toBe(true);
+    expect(state.calls).toBe(2);
+  });
+});
+
+describe('isTransferRetryable', () => {
+  it('retries by error code for real undici/zlib error shapes', () => {
+    expect(isTransferRetryable({ code: 'UND_ERR_BODY_TIMEOUT', message: 'Body Timeout Error' })).toBe(true);
+    expect(isTransferRetryable({ code: 'UND_ERR_HEADERS_TIMEOUT', message: 'Headers Timeout Error' })).toBe(true);
+    expect(isTransferRetryable({ code: 'ECONNRESET', message: 'read ECONNRESET' })).toBe(true);
+    expect(isTransferRetryable({ code: 'Z_BUF_ERROR', message: 'unexpected end of file' })).toBe(true);
+  });
+
+  it('does not retry the path-traversal guard or an unrecognized error', () => {
+    expect(isTransferRetryable({ message: 'refusing range write outside the clone' })).toBe(false);
+    expect(isTransferRetryable({ message: 'boom' })).toBe(false);
   });
 });
 
