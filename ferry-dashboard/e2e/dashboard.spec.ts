@@ -183,6 +183,15 @@ test('3b gate: sign up → add site → pair → watch progress → ready in the
   // composer stays usable with the card in the feed
   await expect(page.getByPlaceholder('Ask a follow-up or request another fix…')).toBeEnabled();
 
+  // The card must keep its height when the chat overflows the viewport. The chat body is a
+  // flex column; an overflow:hidden child's automatic min-height is 0, so without flex-shrink:0
+  // the card (and tool blocks) get squeezed toward a ~2px strip once the thread is long enough.
+  const fullHeight = (await page.locator('.ccard').boundingBox())?.height ?? 0;
+  await page.setViewportSize({ width: 1280, height: 300 });
+  const squeezedHeight = (await page.locator('.ccard').boundingBox())?.height ?? 0;
+  expect(squeezedHeight).toBeGreaterThanOrEqual(fullHeight - 5);
+  await page.setViewportSize({ width: 1280, height: 720 });
+
   // replayed from history after a reload
   await page.reload();
   await expect(page.locator('.ccard')).toBeVisible();
