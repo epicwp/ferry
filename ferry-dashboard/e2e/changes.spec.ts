@@ -36,9 +36,13 @@ test('the changes tab lists changes with status pills, filters and a draft badge
   await expect(page.locator('.change-row--draft .status-pill')).toHaveText('draft');
   await expect(page.locator('.status-pill--pushed').first()).toHaveText('pushed');
   await expect(page.locator('.status-pill--rolled_back')).toHaveText('rolled back');
-  // draft row: amber border + Push action; others: View
-  await expect(page.locator('.change-row--draft').getByRole('button', { name: 'Push' })).toBeVisible();
+  // draft row: amber border + honest review action (nothing pushes from the list); others: View
+  await expect(page.locator('.change-row--draft').getByRole('button', { name: 'Review & push' })).toBeVisible();
   await expect(page.locator('.change-row').filter({ hasText: 'pushed' }).first().getByRole('link', { name: 'View' })).toBeVisible();
+  // the title is a link too — look first without a push-labeled affordance
+  await page.locator('.change-row--draft').getByRole('link', { name: 'VAT calculation fixed' }).click();
+  await expect(page).toHaveURL(/\/changes\/\d+$/);
+  await page.goBack();
   // honest smoke meta: default smokeResult -> "smoke test ✓"; explicit smokeResult: null -> "smoke unknown"
   const pushedWithSmoke = page.locator('.change-row').filter({ hasText: 'Pushed with smoke' });
   await expect(pushedWithSmoke.locator('.change-row__meta')).toContainText('smoke test ✓');
