@@ -87,12 +87,12 @@ export function ChangesPage() {
                     {ICON[c.status] ?? String(c.seq).padStart(2, '0')}
                   </span>
                   <div className="change-row__text">
-                    <span className="change-row__title">{c.title}</span>
+                    <Link to={`/sites/${siteId}/changes/${c.seq}`} className="change-row__title">{c.title}</Link>
                     <span className={meta.failed ? 'change-row__meta change-row__meta--failed' : 'change-row__meta'}>{meta.text}</span>
                   </div>
                   <StatusPill status={c.status} />
                   {c.status === 'draft' ? (
-                    <Link to={`/sites/${siteId}/changes/${c.seq}`} role="button" className="btn btn--push btn--sm">Push</Link>
+                    <Link to={`/sites/${siteId}/changes/${c.seq}`} role="button" className="btn btn--push btn--sm">Review &amp; push</Link>
                   ) : (
                     <Link to={`/sites/${siteId}/changes/${c.seq}`} className="btn btn--outline btn--sm">View</Link>
                   )}
