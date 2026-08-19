@@ -87,6 +87,29 @@ describe('fetchAll', () => {
     expect(existsSync(join(destDir, '..', 'escape.txt'))).toBe(false);
     rmSync(destDir, { recursive: true, force: true });
   });
+
+  it('extracts a plugin-emitted GNU LongLink entry to its full long path (ferry-plugin/src/Tar.php round-trip)', async () => {
+    // Real WP fatal fixture: 152-byte path whose final segment is 103 bytes, over the
+    // ustar 100-byte name-field limit. This is the entry ferry-plugin/src/Tar.php now
+    // emits as a GNU LongLink extension instead of throwing. Hand-built here per the
+    // exact same byte layout Tar.php writes, to prove node-tar reads it transparently
+    // and lands the file at its FULL long path (not the 100-byte-truncated name).
+    const destDir = mkdtempSync(join(tmpdir(), 'ferry-longlink-'));
+    const longPath =
+      'wp-content/plugins/elementor-pro/assets/js/notes/vendors-node_modules_radix-ui_react-alert-dialog_dist_index_module_js-node_modules_radix-ui_r-e4587e.js';
+    expect(longPath.length).toBe(152);
+    const content = Buffer.from('js content');
+    const meta = Buffer.from(JSON.stringify({ complete: true, next_index: 1, skipped: [] }));
+    const archive = Buffer.concat([
+      rawLongLinkEntry(longPath, content),
+      rawTarEntry('.ferry-meta.json', meta),
+      Buffer.alloc(1024), // end-of-archive blocks
+    ]);
+    const result = await extractBatch(gzipSync(archive), destDir);
+    expect(result).toEqual({ complete: true, next_index: 1, skipped: [] });
+    expect(readFileSync(join(destDir, longPath))).toEqual(content);
+    rmSync(destDir, { recursive: true, force: true });
+  });
 });
 
 /** Fake FerryClient: postStream is scripted per call - lets tests control exactly what a
@@ -403,4 +426,35 @@ function rawTarEntry(name: string, content: Buffer): Buffer {
   const body = Buffer.alloc(Math.ceil(content.length / 512) * 512);
   content.copy(body);
   return Buffer.concat([header, body]);
+}
+
+/** Hand-built GNU LongLink entry pair - mirrors exactly what ferry-plugin/src/Tar.php emits
+ *  for a path that overflows the ustar 100-byte name field: a typeflag 'L' header whose
+ *  data payload is the full path (+ NUL, padded to 512), followed by the real entry header
+ *  (name truncated to 100 bytes, prefix empty) and its content. */
+function rawLongLinkEntry(fullPath: string, content: Buffer): Buffer {
+  function ustarHeader(name: string, size: number, typeflag: string): Buffer {
+    const header = Buffer.alloc(512);
+    header.write(name, 0, 100, 'utf8');
+    header.write('0000644\0', 100);
+    header.write('0000000\0', 108);
+    header.write('0000000\0', 116);
+    header.write(size.toString(8).padStart(11, '0') + '\0', 124);
+    header.write('00000000000\0', 136);
+    header.write('        ', 148); // checksum field = spaces while summing
+    header.write(typeflag, 156);
+    header.write('ustar\0' + '00', 257);
+    let sum = 0;
+    for (const b of header) sum += b;
+    header.write(sum.toString(8).padStart(6, '0') + '\0 ', 148);
+    return header;
+  }
+  function padTo512(buf: Buffer): Buffer {
+    const pad = (512 - (buf.length % 512)) % 512;
+    return pad === 0 ? buf : Buffer.concat([buf, Buffer.alloc(pad)]);
+  }
+  const longData = Buffer.from(fullPath + '\0', 'utf8');
+  const longHeader = ustarHeader('././@LongLink', longData.length, 'L');
+  const realHeader = ustarHeader(fullPath.slice(0, 100), content.length, '0');
+  return Buffer.concat([longHeader, padTo512(longData), realHeader, padTo512(content)]);
 }
