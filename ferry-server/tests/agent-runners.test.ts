@@ -209,4 +209,14 @@ describe('auditedEnv', () => {
     expect(env.DOCKER_HOST).toBeUndefined();
     expect(env.PATH).toBe('/usr/bin'); // other allowlisted vars still pass through
   });
+
+  it('sets IS_SANDBOX=1 for fly regardless of the source env', () => {
+    const env = auditedEnv('/config', 'fly', { PATH: '/usr/bin' } as NodeJS.ProcessEnv);
+    expect(env.IS_SANDBOX).toBe('1');
+  });
+
+  it('does not set IS_SANDBOX for ddev', () => {
+    const env = auditedEnv('/config', 'ddev', { PATH: '/usr/bin', IS_SANDBOX: '1' } as NodeJS.ProcessEnv);
+    expect(env.IS_SANDBOX).toBeUndefined();
+  });
 });

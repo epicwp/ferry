@@ -50,6 +50,10 @@ export function auditedEnv(configDir: string, envKind: 'ddev' | 'fly', sourceEnv
     if (value === undefined) continue;
     if (allowlist.includes(key) || key.startsWith('LANG') || key.startsWith('LC_')) env[key] = value;
   }
+  // The fly CP container runs as root, and the CLI refuses bypassPermissions as root
+  // unless it is told it runs inside a sandbox — here the Firecracker microVM is the
+  // isolation boundary (accepted M2a posture: the agent already holds a host shell).
+  if (envKind === 'fly') env.IS_SANDBOX = '1';
   return env;
 }
 
