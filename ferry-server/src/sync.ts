@@ -35,12 +35,17 @@ export class SyncManager {
   }
 
   snapshot(site: Site): SyncState {
-    const running = this.active.get(site.id);
-    if (running) return running;
+    // A persisted terminal status is authoritative — it must win over a stale
+    // `active` entry (e.g. a leaked one) so a fresh snapshot never reports a
+    // run as still going when the DB already recorded how it ended.
     if (site.status === 'ready') {
       return { status: 'ready', cloneUrl: this.engine.cloneUrl(site.slug), verifiedAt: site.verifiedAt, error: null };
     }
     if (site.status === 'error') return { status: 'error', error: site.lastError };
+    if (site.status === 'syncing') {
+      const running = this.active.get(site.id);
+      if (running) return running;
+    }
     return { status: 'idle', error: null };
   }
 
@@ -73,6 +78,10 @@ export class SyncManager {
     try {
       const result = await this.engine.pull(site.slug, {
         onProgress: (e: PullProgress) => {
+          // A late tick from a still-running concurrent worker must not resurrect
+          // an entry whose run() has already reached a terminal state (see run()'s
+          // success/error paths, which delete from `active`).
+          if (!this.active.has(site.id)) return;
           const state: SyncState = { status: 'syncing', phase: e.phase, current: e.current, total: e.total, detail: e.detail };
           this.active.set(site.id, state);
           this.emit(site.id, state);

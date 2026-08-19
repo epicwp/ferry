@@ -30,6 +30,8 @@ export function SyncPage() {
   const [loadError, setLoadError] = useState('');
   const [copied, setCopied] = useState(false);
   const testedRef = useRef(false);
+  const siteRef = useRef<Site | null>(null);
+  siteRef.current = site;
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -50,6 +52,17 @@ export function SyncPage() {
   useEffect(() => {
     const es = new EventSource(`/api/sites/${id}/sync/events`);
     es.onmessage = (ev) => setSync(JSON.parse(ev.data) as SyncState);
+    es.onerror = () => {
+      // A dropped/failed SSE stream must not leave the page stuck — fall back to
+      // the persisted site status so the error+Retry (or ready) view still renders.
+      es.close();
+      const s = siteRef.current;
+      if (s?.status === 'error') {
+        setSync({ status: 'error', error: s.lastError });
+      } else if (s?.status === 'ready') {
+        window.location.reload();
+      }
+    };
     return () => es.close();
   }, [id]);
 
@@ -79,6 +92,10 @@ export function SyncPage() {
       setTimeout(() => setCopied(false), 2000);
     }
   };
+
+  // A dropped/stale SSE (sync stuck on a non-terminal frame, or never delivered one)
+  // must not hide Retry when the persisted site status already says error.
+  const showError = sync.status === 'error' || (site.status === 'error' && sync.status !== 'syncing');
 
   const idx = phaseIndex(sync.phase);
   const fraction = sync.total ? (sync.current ?? 0) / sync.total : 0;
@@ -155,9 +172,9 @@ export function SyncPage() {
           </div>
         )}
 
-        {sync.status === 'error' && (
+        {showError && (
           <div className="card">
-            <div className="form-error" style={{ marginTop: 0 }}>{sync.error}</div>
+            <div className="form-error" style={{ marginTop: 0 }}>{sync.error ?? site.lastError}</div>
             {startError && <div className="form-error">{startError}</div>}
             <button className="btn btn--primary" style={{ width: '100%', marginTop: 14 }} onClick={start}>
               Retry sync
