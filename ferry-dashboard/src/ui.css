@@ -247,7 +247,9 @@ a:hover { color: oklch(0.44 0.16 262); }
 .chat__caret { display: inline-block; width: 2px; height: 13px; background: var(--text); margin-left: 2px; vertical-align: -2px; animation: blink 1s step-end infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
-.chat__toolblock { border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; font-size: 11.5px; max-width: 88%; }
+/* flex-shrink: 0 on chat children with overflow:hidden — in the chat__body flex column their
+   automatic min-height is 0, so they'd silently squeeze to a sliver once the thread overflows. */
+.chat__toolblock { flex-shrink: 0; border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; font-size: 11.5px; max-width: 88%; }
 .chat__toolrow { display: flex; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--muted); }
 .chat__toolrow:last-child { border-bottom: 0; }
 .chat__tool-name { color: var(--green); flex: none; }
@@ -267,7 +269,7 @@ a:hover { color: oklch(0.44 0.16 262); }
 .chat__newsession { align-self: flex-start; border: 0; background: none; padding: 0; font-size: 11.5px; color: var(--faint); cursor: pointer; }
 .chat__newsession:hover { color: var(--accent); }
 
-.ccard { max-width: 92%; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: 0 10px 30px -18px rgba(22, 24, 44, 0.35); overflow: hidden; }
+.ccard { flex-shrink: 0; max-width: 92%; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: 0 10px 30px -18px rgba(22, 24, 44, 0.35); overflow: hidden; }
 .ccard__head { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
 .ccard__head .state-icon { width: 22px; height: 22px; }
 .ccard__title { font-weight: 600; font-size: 15px; flex: 1; }
