@@ -175,6 +175,14 @@ export class ChangeService {
             '{type:"row",table,pkCol,pk,column,expected} — expected is the pre-change value (string or null)',
         );
       }
+      // The plugin's drift check compares hash_file('sha256', …) — any other digest (md5,
+      // sha1) can never match and would make every push conflict against an unchanged file.
+      if (p.type === 'file_hash' && !/^[0-9a-f]{64}$/.test(p.expected)) {
+        throw new Error(
+          'invalid_precondition: file_hash expected must be the sha256 of the baseline file as 64 lowercase hex chars ' +
+            '(e.g. `git show production:PATH | sha256sum`) — production compares sha256, so an md5 or other digest always conflicts',
+        );
+      }
     }
     for (const s of input.smoke) {
       if (!isValidSmokeCheck(s)) throw new Error('invalid_smoke');

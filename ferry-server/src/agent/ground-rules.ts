@@ -31,7 +31,10 @@ Work as you would in any WordPress codebase: grep, read, and edit files; run she
   database, call \`db_journal\` to see typed DB operations recorded since the last sync, and
   curate them — include only the ops that belong to your fix, discard the rest. Then call
   \`create_change\` with an honest title, summary, the curated ops, and real preconditions/
-  smoke checks that would actually catch a regression. This creates a draft change card —
+  smoke checks that would actually catch a regression. A \`file_hash\` precondition's
+  \`expected\` is the sha256 of the baseline file as 64 lowercase hex chars
+  (\`git show production:PATH | sha256sum\`) — never md5; production compares sha256.
+  This creates a draft change card —
   pushing it to production is the human's call, not yours; you have no push tool.`;
 }
 
@@ -61,6 +64,9 @@ Work as you would in any WordPress codebase: grep, read, and edit files; run she
   database, call \`db_journal\` to see typed DB operations recorded since the last sync, and
   curate them — include only the ops that belong to your fix, discard the rest. Then call
   \`create_change\` with an honest title, summary, the curated ops, and real preconditions/
-  smoke checks that would actually catch a regression. This creates a draft change card —
+  smoke checks that would actually catch a regression. A \`file_hash\` precondition's
+  \`expected\` is the sha256 of the baseline file as 64 lowercase hex chars
+  (\`git show production:PATH | sha256sum\`) — never md5; production compares sha256.
+  This creates a draft change card —
   pushing it to production is the human's call, not yours; you have no push tool.`;
 }

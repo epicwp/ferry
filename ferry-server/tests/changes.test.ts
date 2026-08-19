@@ -174,6 +174,24 @@ describe('ChangeService', () => {
     await expect(shopService.create(site, input)).resolves.toMatchObject({ status: 'draft' });
   });
 
+  it('rejects a file_hash precondition whose expected is not sha256 hex (the plugin compares sha256; md5 always conflicts)', async () => {
+    const md5 = 'a194a1327864fa4ca54170494d784219';
+    const input = validInput({
+      preconditions: [{ type: 'file_hash', path: 'site.php', expected: md5 }],
+    });
+    await expect(service.create(site, input)).rejects.toThrow(/file_hash.*sha256/);
+    expect(store.changesFor(site.id)).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it('accepts a file_hash precondition with a 64-hex sha256 expected', async () => {
+    const sha256 = '2f4441b1ae8d086b2b1a706017c0022b9d6d63f329c4a3533c0b0b0ae4cbbc79';
+    const input = validInput({
+      preconditions: [{ type: 'file_hash', path: 'site.php', expected: sha256 }],
+    });
+    await expect(service.create(site, input)).resolves.toMatchObject({ status: 'draft' });
+  });
+
   it('throws invalid_op for an unrecognized op kind, before touching the clone', async () => {
     const input = validInput({
       ops: [{ kind: 'row_updatee', table: 'wp_options', pkCol: 'ID', pk: 1, old: {}, new: {} } as unknown as DbOp],
