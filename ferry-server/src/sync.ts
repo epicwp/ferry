@@ -23,6 +23,11 @@ type Listener = (state: SyncState) => void;
 export class SyncManager {
   private active = new Map<number, SyncState>();
   private listeners = new Map<number, Set<Listener>>();
+  // Bumped on every start() so a late onProgress tick from an old (already-ended)
+  // run can be told apart from the run that currently owns `active` — the
+  // `active.has(id)` check alone can't tell the two apart once a retry has
+  // repopulated the entry for a new run.
+  private gen = new Map<number, number>();
 
   constructor(
     private readonly store: Store,
@@ -51,11 +56,13 @@ export class SyncManager {
 
   start(site: Site): void {
     if (this.active.has(site.id)) throw new Error('already_syncing');
+    const myGen = (this.gen.get(site.id) ?? 0) + 1;
+    this.gen.set(site.id, myGen);
     const state: SyncState = { status: 'syncing', phase: 'info' };
     this.active.set(site.id, state);
     this.store.setStatus(site.id, 'syncing', { lastError: null });
     this.emit(site.id, state);
-    void this.run(site);
+    void this.run(site, myGen);
   }
 
   subscribe(site: Site, fn: Listener): () => void {
@@ -74,14 +81,17 @@ export class SyncManager {
     return () => set.delete(fn);
   }
 
-  private async run(site: Site): Promise<void> {
+  private async run(site: Site, myGen: number): Promise<void> {
     try {
       const result = await this.engine.pull(site.slug, {
         onProgress: (e: PullProgress) => {
           // A late tick from a still-running concurrent worker must not resurrect
           // an entry whose run() has already reached a terminal state (see run()'s
-          // success/error paths, which delete from `active`).
-          if (!this.active.has(site.id)) return;
+          // success/error paths, which delete from `active`) — nor, if a retry has
+          // since repopulated `active` for a NEW run, be mistaken for that run's
+          // progress. Both checks are needed: `active.has` alone can't tell an old
+          // run's late tick apart from a new run that happens to own the same id.
+          if (!this.active.has(site.id) || this.gen.get(site.id) !== myGen) return;
           const state: SyncState = { status: 'syncing', phase: e.phase, current: e.current, total: e.total, detail: e.detail };
           this.active.set(site.id, state);
           this.emit(site.id, state);

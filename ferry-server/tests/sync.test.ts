@@ -123,6 +123,48 @@ describe('SyncManager', () => {
     expect(() => sync.start(site)).not.toThrow();
   });
 
+  it('a late onProgress tick from an old run does not clobber a new run started after retry', async () => {
+    const done1 = deferred<PullResult>();
+    const done2 = deferred<PullResult>();
+    let emit1: ((e: PullProgress) => void) | undefined;
+    let emit2: ((e: PullProgress) => void) | undefined;
+    let call = 0;
+    const { store, user, site, sync } = setup({
+      pull: async (_slug, opts) => {
+        call += 1;
+        if (call === 1) { emit1 = opts.onProgress; return done1.promise; }
+        emit2 = opts.onProgress;
+        return done2.promise;
+      },
+    });
+    const seen: SyncState[] = [];
+    sync.subscribe(site, (s) => seen.push(s));
+
+    // Run 1: gets a progress tick, then fails — active is repopulated with a
+    // fresh entry, and its terminal error path deletes it again.
+    sync.start(site);
+    emit1!({ phase: 'files', current: 1, total: 5 });
+    done1.reject(new Error('run 1 failed'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sync.isRunning(site.id)).toBe(false);
+
+    // Retry: run 2 starts (active repopulated for the NEW run) and reports its
+    // own live progress.
+    sync.start(store.siteFor(user.id, site.id)!);
+    emit2!({ phase: 'db', current: 3, total: 10 });
+
+    // Run 1's concurrent worker is still alive and fires a late tick belonging
+    // to the OLD run — `active.has(site.id)` is true again (run 2 owns it), but
+    // this tick must not be mistaken for run 2's progress.
+    emit1!({ phase: 'files', current: 5, total: 5 });
+
+    expect(seen.at(-1)).toMatchObject({ status: 'syncing', phase: 'db', current: 3, total: 10 }); // run 2's frame intact
+    expect(sync.isRunning(site.id)).toBe(true); // run 2 still active, untouched
+
+    done2.resolve(RESULT);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
   it('isolates throwing subscribers and ensures other subscribers receive final state', async () => {
     const done = deferred<PullResult>();
     let emit: ((e: PullProgress) => void) | undefined;

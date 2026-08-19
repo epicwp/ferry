@@ -30,8 +30,6 @@ export function SyncPage() {
   const [loadError, setLoadError] = useState('');
   const [copied, setCopied] = useState(false);
   const testedRef = useRef(false);
-  const siteRef = useRef<Site | null>(null);
-  siteRef.current = site;
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -52,17 +50,12 @@ export function SyncPage() {
   useEffect(() => {
     const es = new EventSource(`/api/sites/${id}/sync/events`);
     es.onmessage = (ev) => setSync(JSON.parse(ev.data) as SyncState);
-    es.onerror = () => {
-      // A dropped/failed SSE stream must not leave the page stuck — fall back to
-      // the persisted site status so the error+Retry (or ready) view still renders.
-      es.close();
-      const s = siteRef.current;
-      if (s?.status === 'error') {
-        setSync({ status: 'error', error: s.lastError });
-      } else if (s?.status === 'ready') {
-        window.location.reload();
-      }
-    };
+    // Do NOT close() here — that would disable EventSource's native auto-reconnect,
+    // which is the actual recovery path: the server's snapshot() is now correct
+    // (Fix 2a), so a reconnect self-heals to the true current state. Flipping the
+    // view off a frozen `site` snapshot here would risk showing a stale error over
+    // a sync that's actually still running.
+    es.onerror = () => console.warn('sync SSE connection error — waiting for auto-reconnect');
     return () => es.close();
   }, [id]);
 
@@ -74,7 +67,16 @@ export function SyncPage() {
       </div>
     );
   }
-  if (!site || !sync) return <div className="page-center" />;
+  if (!site) return <div className="page-center" />;
+  // Before the first SSE frame ever arrives, fall back to the persisted site
+  // status so a dropped/never-connected stream still shows Retry on an already-
+  // errored site. Once a live frame has arrived, `sync` is fully authoritative —
+  // `site.status` is a one-time snapshot from mount and must not be consulted
+  // again (it would otherwise fight a live view, e.g. showing the error card
+  // over a sync that has since reached ready via a retry).
+  if (!sync && site.status !== 'error') return <div className="page-center" />;
+  const view: SyncState = sync ?? { status: 'error', error: site.lastError };
+  const showError = view.status === 'error';
 
   const start = async () => {
     setStartError('');
@@ -86,19 +88,15 @@ export function SyncPage() {
     }
   };
   const copy = async () => {
-    if (sync.cloneUrl) {
-      await navigator.clipboard.writeText(sync.cloneUrl);
+    if (view.cloneUrl) {
+      await navigator.clipboard.writeText(view.cloneUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
   };
 
-  // A dropped/stale SSE (sync stuck on a non-terminal frame, or never delivered one)
-  // must not hide Retry when the persisted site status already says error.
-  const showError = sync.status === 'error' || (site.status === 'error' && sync.status !== 'syncing');
-
-  const idx = phaseIndex(sync.phase);
-  const fraction = sync.total ? (sync.current ?? 0) / sync.total : 0;
+  const idx = phaseIndex(view.phase);
+  const fraction = view.total ? (view.current ?? 0) / view.total : 0;
   const pct = Math.min(100, Math.round(((idx + fraction) / PHASES.length) * 100));
 
   return (
@@ -111,11 +109,11 @@ export function SyncPage() {
             <span className="sync-panel__name">{site.name}</span>
             <span className="mono sync-panel__sub">production → clone</span>
           </span>
-          {sync.status === 'syncing' && <span className="sync-panel__badge mono">running</span>}
-          {sync.status === 'ready' && <span className="sync-panel__badge sync-panel__badge--ok mono">verified</span>}
+          {view.status === 'syncing' && <span className="sync-panel__badge mono">running</span>}
+          {view.status === 'ready' && <span className="sync-panel__badge sync-panel__badge--ok mono">verified</span>}
         </div>
 
-        {sync.status === 'idle' && (
+        {view.status === 'idle' && (
           <div className="card">
             {test && <div className="sync-panel__test">✓ Connected — WordPress {test.wp} · PHP {test.php} · {test.db}</div>}
             {testError && <div className="form-error">{testError}</div>}
@@ -127,17 +125,17 @@ export function SyncPage() {
           </div>
         )}
 
-        {sync.status === 'syncing' && (
+        {view.status === 'syncing' && (
           <>
             <div className="progress"><div className="progress__bar" style={{ width: `${pct}%` }} /></div>
             <div className="phase-list">
               {PHASES.map((p, i) => {
                 const state = i < idx ? 'done' : i === idx ? 'active' : 'pending';
                 const counter =
-                  state === 'active' && sync.total !== undefined
+                  state === 'active' && view.total !== undefined
                     ? p.key === 'db'
-                      ? `${sync.current ?? 0} / ${sync.total} tables${sync.detail ? ` · ${sync.detail}` : ''}`
-                      : `${sync.current ?? 0} / ${sync.total}`
+                      ? `${view.current ?? 0} / ${view.total} tables${view.detail ? ` · ${view.detail}` : ''}`
+                      : `${view.current ?? 0} / ${view.total}`
                     : null;
                 return (
                   <div key={p.key} className={`phase phase--${state}`}>
@@ -154,15 +152,15 @@ export function SyncPage() {
           </>
         )}
 
-        {sync.status === 'ready' && (
+        {view.status === 'ready' && (
           <div className="card sync-panel__done">
             <div className="sync-panel__verified">Clone verified ✓</div>
             <div className="sync-panel__verified-sub">
               The control plane fetched the clone over HTTPS and got a live WordPress response
-              {sync.verifiedAt ? ` · ${timeAgo(sync.verifiedAt)}` : ''}.
+              {view.verifiedAt ? ` · ${timeAgo(view.verifiedAt)}` : ''}.
             </div>
             <div className="clone-url">
-              <span className="mono clone-url__text">{sync.cloneUrl}</span>
+              <span className="mono clone-url__text">{view.cloneUrl}</span>
               <button className="btn btn--outline" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>
             </div>
             <div className="sync-panel__hint">This clone is for your agent — the URL resolves only where the clone runs.</div>
@@ -174,7 +172,7 @@ export function SyncPage() {
 
         {showError && (
           <div className="card">
-            <div className="form-error" style={{ marginTop: 0 }}>{sync.error ?? site.lastError}</div>
+            <div className="form-error" style={{ marginTop: 0 }}>{view.error ?? site.lastError}</div>
             {startError && <div className="form-error">{startError}</div>}
             <button className="btn btn--primary" style={{ width: '100%', marginTop: 14 }} onClick={start}>
               Retry sync
