@@ -70,11 +70,13 @@ describe('SyncManager', () => {
 
   it('refuses a second concurrent sync and replays state to late subscribers', async () => {
     const done = deferred<PullResult>();
-    const { site, sync } = setup({ pull: async () => done.promise, verifyClone: async () => ({ ok: true }) });
+    const { store, user, site, sync } = setup({ pull: async () => done.promise, verifyClone: async () => ({ ok: true }) });
     sync.start(site);
     expect(() => sync.start(site)).toThrow('already_syncing');
     const seen: SyncState[] = [];
-    sync.subscribe(site, (s) => seen.push(s)); // subscribe mid-sync
+    // Routes always re-fetch the site fresh before subscribing (routes/sync.ts) — mirror that,
+    // since snapshot() now keys the running frame off the DB status, not just the active map.
+    sync.subscribe(store.siteFor(user.id, site.id)!, (s) => seen.push(s)); // subscribe mid-sync
     expect(seen[0]!.status).toBe('syncing');
     done.resolve(RESULT);
     await new Promise((r) => setTimeout(r, 20));
@@ -94,6 +96,73 @@ describe('SyncManager', () => {
     const detail = await app.inject({ method: 'GET', url: `/api/sites/${id}`, headers: { cookie } });
     expect(detail.json().status).toBe('syncing');
     expect(detail.json().lastError).toBeNull();
+  });
+
+  it('a late onProgress tick after a failed pull cannot resurrect the active entry', async () => {
+    let emit: ((e: PullProgress) => void) | undefined;
+    const { store, user, site, sync } = setup({
+      pull: async (_slug, opts) => {
+        opts.onProgress!({ phase: 'files', current: 1, total: 2 });
+        emit = opts.onProgress;
+        throw new Error('manifest made no progress - aborting');
+      },
+    });
+    const seen: SyncState[] = [];
+    sync.subscribe(site, (s) => seen.push(s));
+    sync.start(site);
+    await new Promise((r) => setTimeout(r, 20)); // run() catches, deletes the active entry
+    expect(sync.isRunning(site.id)).toBe(false);
+    expect(store.siteFor(user.id, site.id)!.status).toBe('error');
+
+    // A concurrent transfer worker fires onProgress after the run already ended.
+    emit!({ phase: 'files', current: 2, total: 2 });
+    expect(sync.isRunning(site.id)).toBe(false); // must not resurrect the leaked entry
+    expect(seen.at(-1)!.status).toBe('error'); // no stale 'syncing' frame emitted either
+
+    // The 409 guard is clear — a retry can start.
+    expect(() => sync.start(site)).not.toThrow();
+  });
+
+  it('a late onProgress tick from an old run does not clobber a new run started after retry', async () => {
+    const done1 = deferred<PullResult>();
+    const done2 = deferred<PullResult>();
+    let emit1: ((e: PullProgress) => void) | undefined;
+    let emit2: ((e: PullProgress) => void) | undefined;
+    let call = 0;
+    const { store, user, site, sync } = setup({
+      pull: async (_slug, opts) => {
+        call += 1;
+        if (call === 1) { emit1 = opts.onProgress; return done1.promise; }
+        emit2 = opts.onProgress;
+        return done2.promise;
+      },
+    });
+    const seen: SyncState[] = [];
+    sync.subscribe(site, (s) => seen.push(s));
+
+    // Run 1: gets a progress tick, then fails — active is repopulated with a
+    // fresh entry, and its terminal error path deletes it again.
+    sync.start(site);
+    emit1!({ phase: 'files', current: 1, total: 5 });
+    done1.reject(new Error('run 1 failed'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sync.isRunning(site.id)).toBe(false);
+
+    // Retry: run 2 starts (active repopulated for the NEW run) and reports its
+    // own live progress.
+    sync.start(store.siteFor(user.id, site.id)!);
+    emit2!({ phase: 'db', current: 3, total: 10 });
+
+    // Run 1's concurrent worker is still alive and fires a late tick belonging
+    // to the OLD run — `active.has(site.id)` is true again (run 2 owns it), but
+    // this tick must not be mistaken for run 2's progress.
+    emit1!({ phase: 'files', current: 5, total: 5 });
+
+    expect(seen.at(-1)).toMatchObject({ status: 'syncing', phase: 'db', current: 3, total: 10 }); // run 2's frame intact
+    expect(sync.isRunning(site.id)).toBe(true); // run 2 still active, untouched
+
+    done2.resolve(RESULT);
+    await new Promise((r) => setTimeout(r, 20));
   });
 
   it('isolates throwing subscribers and ensures other subscribers receive final state', async () => {
@@ -217,6 +286,49 @@ describe('SyncManager afterReady hook', () => {
     await vi.waitFor(() => expect(states).toContain('ready'));
     expect(sync.isRunning(site.id)).toBe(false);
     spy.mockRestore();
+  });
+});
+
+describe('SyncManager snapshot authority', () => {
+  it('prefers a persisted error status over a stale active entry', async () => {
+    const done = deferred<PullResult>();
+    const { store, user, site, sync } = setup({ pull: async () => done.promise });
+    sync.start(site);
+    expect(sync.isRunning(site.id)).toBe(true);
+    // Simulate a leaked active entry (Bug 1): the DB has already moved to 'error'
+    // while `active` still holds a stale 'syncing' entry.
+    store.setStatus(site.id, 'error', { lastError: 'boom' });
+    const staleSite = store.siteFor(user.id, site.id)!;
+    expect(sync.snapshot(staleSite)).toMatchObject({ status: 'error', error: 'boom' });
+    done.resolve(RESULT);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  it('prefers a persisted ready status over a stale active entry', async () => {
+    const done = deferred<PullResult>();
+    const { store, user, site, sync } = setup({ pull: async () => done.promise, verifyClone: async () => ({ ok: true }) });
+    sync.start(site);
+    const now = new Date().toISOString();
+    store.setStatus(site.id, 'ready', { lastError: null, lastSyncAt: now, verifiedAt: now });
+    const staleSite = store.siteFor(user.id, site.id)!;
+    expect(sync.snapshot(staleSite)).toMatchObject({ status: 'ready', cloneUrl: 'https://klant-nl.ddev.site', verifiedAt: now });
+    done.resolve(RESULT);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  it('returns the running frame when the DB status is genuinely syncing (no regression)', async () => {
+    const done = deferred<PullResult>();
+    let emit: ((e: PullProgress) => void) | undefined;
+    const { store, user, site, sync } = setup({
+      pull: async (_slug, opts) => { emit = opts.onProgress; return done.promise; },
+    });
+    sync.start(site);
+    emit!({ phase: 'files', current: 1, total: 2 });
+    const syncingSite = store.siteFor(user.id, site.id)!;
+    expect(syncingSite.status).toBe('syncing');
+    expect(sync.snapshot(syncingSite)).toMatchObject({ status: 'syncing', phase: 'files', current: 1, total: 2 });
+    done.resolve(RESULT);
+    await new Promise((r) => setTimeout(r, 20));
   });
 });
 
