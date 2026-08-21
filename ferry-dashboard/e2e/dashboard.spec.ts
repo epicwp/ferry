@@ -145,6 +145,16 @@ test('3b gate: sign up → add site → pair → watch progress → ready in the
   await expect(page.getByText('functions.php:412')).toBeVisible();    // tool result
   await expect(page.getByText(/Plan: check the tax settings/)).toBeVisible(); // final agent text
 
+  // Tool rows start collapsed to a single truncated line; the chevron expands and re-collapses.
+  const toolRow = page.locator('.chat__toolrow');
+  await expect(toolRow).not.toHaveClass(/chat__toolrow--open/);
+  const collapsedHeight = (await toolRow.boundingBox())?.height ?? 0;
+  await toolRow.locator('.chat__tool-chevron').click();
+  await expect(toolRow).toHaveClass(/chat__toolrow--open/);
+  expect((await toolRow.boundingBox())?.height ?? 0).toBeGreaterThan(collapsedHeight);
+  await toolRow.locator('.chat__tool-chevron').click();
+  await expect(toolRow).not.toHaveClass(/chat__toolrow--open/);
+
   // history survives reload
   await page.reload();
   await expect(page.getByText(/Plan: check the tax settings/)).toBeVisible();
