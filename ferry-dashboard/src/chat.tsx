@@ -17,6 +17,31 @@ type Block =
 
 const ERROR_SUBTYPES = new Set(['error_max_turns', 'error_max_budget_usd', 'error_during_execution']);
 
+/** One tool call, collapsed to a single truncated line by default; the chevron expands it.
+ *  A collapsed row is clickable anywhere (nothing to select there); once open, only the
+ *  chevron toggles so the full input/output text stays selectable. */
+function ToolRowView({ row }: { row: ToolRow }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      className={open ? 'chat__toolrow chat__toolrow--open' : 'chat__toolrow'}
+      onClick={() => { if (!open) setOpen(true); }}
+    >
+      <button
+        type="button" className="chat__tool-chevron" aria-expanded={open}
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+      >
+        {open ? '▾' : '▸'}
+      </button>
+      <span className="chat__tool-name">{row.name}</span>
+      <span className="chat__tool-input">{row.input}</span>
+      <span className={row.isError ? 'chat__tool-output chat__tool-output--error' : 'chat__tool-output'}>
+        {row.output ?? '…'}
+      </span>
+    </div>
+  );
+}
+
 /** Walk persisted events into renderable blocks, pairing tool_use/tool_result by toolUseId. */
 function buildBlocks(events: AgentWireEvent[]): Block[] {
   const blocks: Block[] = [];
@@ -206,15 +231,7 @@ export function AgentChat({ siteId }: { siteId: number }) {
           if (block.kind === 'tools') {
             return (
               <div key={block.key} className="chat__toolblock mono">
-                {block.rows.map((row) => (
-                  <div key={row.toolUseId} className="chat__toolrow">
-                    <span className="chat__tool-name">{row.name}</span>
-                    <span className="chat__tool-input">{row.input}</span>
-                    <span className={row.isError ? 'chat__tool-output chat__tool-output--error' : 'chat__tool-output'}>
-                      {row.output ?? '…'}
-                    </span>
-                  </div>
-                ))}
+                {block.rows.map((row) => <ToolRowView key={row.toolUseId} row={row} />)}
               </div>
             );
           }

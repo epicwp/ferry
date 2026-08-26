@@ -250,11 +250,16 @@ a:hover { color: oklch(0.44 0.16 262); }
 /* flex-shrink: 0 on chat children with overflow:hidden — in the chat__body flex column their
    automatic min-height is 0, so they'd silently squeeze to a sliver once the thread overflows. */
 .chat__toolblock { flex-shrink: 0; border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; font-size: 11.5px; max-width: 88%; }
-.chat__toolrow { display: flex; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--muted); }
+.chat__toolrow { display: flex; align-items: baseline; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--muted); cursor: pointer; }
+.chat__toolrow--open { cursor: default; flex-wrap: wrap; }
 .chat__toolrow:last-child { border-bottom: 0; }
+.chat__tool-chevron { flex: none; border: 0; background: none; padding: 0; color: var(--faint); cursor: pointer; font: inherit; }
 .chat__tool-name { color: var(--green); flex: none; }
-.chat__tool-input { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat__tool-output { color: var(--faint); }
+/* collapsed: one responsive line — input and output share the row, both ellipsized */
+.chat__tool-input { flex: 0 1 auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat__tool-output { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); }
+.chat__toolrow--open .chat__tool-input,
+.chat__toolrow--open .chat__tool-output { flex: 1 1 100%; max-width: none; white-space: pre-wrap; word-break: break-word; overflow: visible; text-overflow: clip; margin-left: 20px; }
 .chat__tool-output--error { color: var(--red); }
 
 .chat__status { font-size: 12px; color: var(--faint); text-align: center; }
